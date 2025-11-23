@@ -2,7 +2,7 @@
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>VR Slideshow — Base64 textures, 10 panels</title>
+    <title>VR Slideshow — A-Frame assets-safe (10 panels)</title>
 
     <!-- A-Frame + look-at -->
     <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
@@ -57,12 +57,16 @@
       <p style="margin-top:12px;font-size:13px;color:#aaa;">
         When ready: press <strong>Start Slideshow</strong>. The page will prepare textures and then prompt to enter VR.<br>
         Diagram link (repo asset): <a href="assets/diagram.png" target="_blank">assets/diagram.png</a><br>
-        (Original upload path for reference: <code>/mnt/data/A_2D_digital_illustration_demonstrates_a_virtual_r.png</code>)
       </p>
     </div>
 
-    <!-- VR scene - hidden until Start triggers it -->
+    <!-- VR scene - hidden until Start triggers it.
+         NOTE: <a-assets> is required for WebXR textures to work reliably on Quest. -->
     <a-scene id="vrScene" embedded vr-mode-ui="enabled:true" style="display:none; height:100vh;">
+      <a-assets id="aAssets">
+        <!-- dynamically injected <img id="img0"> elements will go here -->
+      </a-assets>
+
       <a-entity id="cameraRig">
         <a-entity id="camera" camera look-controls position="0 1.6 0"></a-entity>
       </a-entity>
@@ -82,61 +86,62 @@
     <script>
       // Config
       const VISIBLE_PANELS = 10;
-      const DEFAULT_PANEL_SIZES = { small: 4.0, medium: 8.0, large: 12.0 }; // approx. 2-3x larger than before
+      const DEFAULT_PANEL_SIZES = { small: 4.0, medium: 8.0, large: 12.0 };
+
       // DOM
       const filePicker = document.getElementById('filePicker');
       const startBtn = document.getElementById('startBtn');
       const imageListDiv = document.getElementById('imageList');
       const statusEl = document.getElementById('status');
       const debugEl = document.getElementById('debug');
+      const aAssets = document.getElementById('aAssets');
 
       // State
-      let fileList = [];    // File objects
-      let dataUrls = [];    // Base64 data URLs
-      let metaList = [];    // { url: dataUrl, width, height }
+      let fileList = [];
+      let metaList = []; // { id: 'img0', url: dataUrl, width, height }
       let panelEntities = [];
       let replaceTimer = null;
+      let nextAssetId = 0;
 
       // Helpers
       function log(msg) {
         console.log(msg);
         debugEl.textContent = String(msg).slice(0, 800);
-        // also set VR debug text (if visible)
         try {
           const vrDebugText = document.getElementById('vrDebugText');
           const vrDebug = document.getElementById('vrDebug');
           if (vrDebugText && vrDebug) {
             vrDebugText.setAttribute('value', String(msg).slice(0, 700));
+            vrDebug.setAttribute('visible', true);
           }
         } catch(e){}
       }
-      function clearLog(){ debugEl.textContent = ''; try{ document.getElementById('vrDebug').setAttribute('visible', false);}catch(e){} }
+      function clearLog() {
+        debugEl.textContent = '';
+        try { document.getElementById('vrDebug').setAttribute('visible', false); } catch(e) {}
+      }
 
       // Convert File -> Base64 data URL using FileReader
       function fileToDataURL(file) {
         return new Promise((resolve, reject) => {
           const reader = new FileReader();
           reader.onerror = () => reject(new Error('FileReader error'));
-          reader.onload = () => {
-            resolve(reader.result);
-          };
+          reader.onload = () => resolve(reader.result);
           reader.readAsDataURL(file);
         });
       }
 
-      // Load image (Image element) to determine natural size — safe pre-VR
+      // Load image dimensions safely (using an Image created from the data URL)
       function getImageDimensionsFromDataURL(dataUrl) {
         return new Promise((resolve, reject) => {
           const img = new Image();
-          img.onload = () => {
-            resolve({ width: img.naturalWidth, height: img.naturalHeight });
-          };
-          img.onerror = (e) => reject(new Error('image decode failed'));
+          img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
+          img.onerror = () => reject(new Error('image decode failed'));
           img.src = dataUrl;
         });
       }
 
-      // UI: add thumbnail
+      // UI: add thumbnail w/ remove
       function addThumb(dataUrl, idx) {
         const w = document.createElement('div');
         w.className = 'thumbWrapper';
@@ -152,50 +157,59 @@
         w.appendChild(rm);
         imageListDiv.appendChild(w);
       }
-
-      // rebuild thumbnails
       function rebuildThumbs() {
         imageListDiv.innerHTML = '';
         metaList.forEach((m,i) => addThumb(m.url, i));
       }
-
       function removeImage(index) {
+        // Remove from metaList and from a-assets DOM
+        const meta = metaList[index];
+        if (meta && meta.id) {
+          const existing = document.getElementById(meta.id);
+          if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+        }
         metaList.splice(index, 1);
         fileList.splice(index, 1);
-        dataUrls.splice(index, 1);
         rebuildThumbs();
         statusEl.textContent = `${metaList.length} images selected.`;
         startBtn.disabled = metaList.length < 1;
       }
 
-      // file picker handler: single-file selection at a time on Quest
+      // file picker handler (single-file selection at a time)
       filePicker.addEventListener('change', async (evt) => {
         const files = Array.from(filePicker.files || []);
         if (!files.length) return;
         const f = files[0];
         statusEl.textContent = `Converting ${f.name}...`;
         try {
-          const dataUrl = await fileToDataURL(f);       // Base64 conversion
+          const dataUrl = await fileToDataURL(f);
           const dims = await getImageDimensionsFromDataURL(dataUrl);
+          const id = `img${nextAssetId++}`;
+          // Create an <img id="..."> inside <a-assets> and set src to the dataURL
+          const imgEl = document.createElement('img');
+          imgEl.setAttribute('id', id);
+          imgEl.setAttribute('src', dataUrl);
+          imgEl.setAttribute('crossorigin', 'anonymous');
+          aAssets.appendChild(imgEl);
+
+          // Store meta
+          metaList.push({ id, url: dataUrl, width: dims.width, height: dims.height });
           fileList.push(f);
-          dataUrls.push(dataUrl);
-          metaList.push({ url: dataUrl, width: dims.width, height: dims.height });
+
           addThumb(dataUrl, metaList.length - 1);
           statusEl.textContent = `${metaList.length} images selected.`;
           startBtn.disabled = metaList.length < 1;
           clearLog();
         } catch (err) {
-          log('Error converting image: ' + (err && err.message ? err.message : err));
+          log('Image conversion error: ' + (err && err.message ? err.message : err));
         } finally {
-          // Reset input so same file can be selected again
           filePicker.value = '';
         }
       });
 
-      // Create a panel entity (with given meta data and panelWidth)
+      // Create a plane that references an a-assets img by id (#imgN)
       function createPanel(meta, panelWidth) {
-        const radius = 25;
-        // random spherical position
+        const radius = 28;
         const u = Math.random();
         const v = Math.random();
         const theta = 2 * Math.PI * u;
@@ -203,11 +217,10 @@
         const x = radius * Math.sin(phi) * Math.cos(theta);
         const y = radius * Math.cos(phi);
         const z = radius * Math.sin(phi) * Math.sin(theta);
-        // small depth offset
-        const depthOffset = (Math.random()-0.5) * 1.0;
-        const px = x * (1 + depthOffset/25);
-        const py = y * (1 + depthOffset/25);
-        const pz = z * (1 + depthOffset/25);
+        const depthOffset = (Math.random()-0.5) * 1.2;
+        const px = x * (1 + depthOffset/28);
+        const py = y * (1 + depthOffset/28);
+        const pz = z * (1 + depthOffset/28);
 
         const plane = document.createElement('a-plane');
 
@@ -219,9 +232,10 @@
         plane.setAttribute('height', height);
         plane.setAttribute('position', `${px} ${py} ${pz}`);
         plane.setAttribute('look-at', '#camera');
-        plane.setAttribute('material', `src: ${meta.url}; side:double; shader:flat;`);
+        // Use the a-assets image reference by id (WebXR-safe)
+        plane.setAttribute('material', `src: #${meta.id}; side:double; shader:flat;`);
 
-        // Ken Burns style (long, smooth)
+        // Ken Burns style
         const dur = Math.floor(20000 + Math.random()*20000);
         plane.setAttribute('animation__pos', `property: position; dur: ${dur}; dir: alternate; loop: true; to: ${px + (Math.random()*1-0.5)} ${py + (Math.random()*0.8-0.4)} ${pz}`);
         const scaleTo = 0.95 + Math.random()*0.25;
@@ -229,20 +243,19 @@
         return plane;
       }
 
-      // Build the visible panels before entering VR (ensures textures are applied safely)
+      // Build visible panels (using the metaList which already has assets registered)
       async function buildVisiblePanels(panelWidth) {
         const container = document.getElementById('panelContainer');
-        // clear any old
         panelEntities.forEach(e => { try{ e.parentNode.removeChild(e);}catch(e){} });
         panelEntities = [];
-        // Choose initial set: use first N or random picks (ensure variety)
+        // initial set
         for (let i=0; i < Math.min(VISIBLE_PANELS, metaList.length); i++) {
           const meta = metaList[i % metaList.length];
           const ent = createPanel(meta, panelWidth);
           container.appendChild(ent);
           panelEntities.push(ent);
         }
-        // if metaList < VISIBLE_PANELS, add random duplicates to reach count
+        // fill to count if fewer images than panels
         while (panelEntities.length < VISIBLE_PANELS) {
           const meta = metaList[Math.floor(Math.random()*metaList.length)];
           const ent = createPanel(meta, panelWidth);
@@ -255,14 +268,14 @@
         if (!panelEntities.length || !metaList.length) return;
         const idx = Math.floor(Math.random()*panelEntities.length);
         const old = panelEntities[idx];
-        try{ old.parentNode.removeChild(old); }catch(e){}
+        try { old.parentNode.removeChild(old); } catch(e) {}
         const meta = metaList[Math.floor(Math.random()*metaList.length)];
         const ent = createPanel(meta, panelWidth);
         document.getElementById('panelContainer').appendChild(ent);
         panelEntities[idx] = ent;
       }
 
-      // Main Start - builds panels (using Base64 textures) then enters VR
+      // Main Start flow
       startBtn.addEventListener('click', async () => {
         startBtn.disabled = true;
         statusEl.textContent = 'Preparing slideshow — building panels...';
@@ -274,6 +287,21 @@
         const panelWidth = DEFAULT_PANEL_SIZES[sizeSetting] || DEFAULT_PANEL_SIZES.medium;
 
         try {
+          // Wait until all <img> assets have finished loading (important)
+          // Check each injected asset element's complete/readystate
+          const assetImgs = Array.from(aAssets.querySelectorAll('img'));
+          // If there are no assets yet, we still proceed (shouldn't happen because metaList.length>0)
+          await Promise.all(assetImgs.map(img => {
+            return new Promise((resolve, reject) => {
+              if (img.complete && img.naturalWidth > 0) return resolve();
+              img.onload = () => resolve();
+              img.onerror = () => {
+                log('Failed to load asset: ' + (img.id || 'unknown'));
+                resolve(); // resolve to avoid blocking — missing textures show white but others load
+              };
+            });
+          }));
+
           await buildVisiblePanels(panelWidth);
         } catch (err) {
           log('Error building panels: ' + (err && err.message ? err.message : err));
@@ -281,15 +309,14 @@
           return;
         }
 
-        // Show VR scene and request enterVR
+        // Show VR scene and enter VR (user gesture)
         document.getElementById('controls').style.display = 'none';
         const scene = document.getElementById('vrScene');
         scene.style.display = 'block';
 
-        // Small timeout to ensure DOM commits
         setTimeout(async () => {
           try {
-            await scene.enterVR(); // user gesture — allowed here
+            await scene.enterVR();
           } catch (err) {
             log('Failed to enter VR: ' + (err && err.message ? err.message : err));
             document.getElementById('controls').style.display = '';
@@ -311,14 +338,13 @@
 
           statusEl.textContent = 'Slideshow running.';
           clearLog();
-        }, 150);
+        }, 120);
       });
 
-      // Cleanup on unload
+      // Cleanup
       window.addEventListener('beforeunload', () => {
         if (replaceTimer) clearInterval(replaceTimer);
       });
-
     </script>
   </body>
 </html>
