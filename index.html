@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>VR Slideshow Sphere — Photos Only (Hosted)</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <div id="ui">
+    <h2>Select Photos for Slideshow</h2>
+    <input id="fileInput" type="file" accept="image/*" multiple />
+    <div class="row"><label for="panelSize">Panel size:</label>
+      <select id="panelSize">
+        <option value="medium" selected>Medium (recommended)</option>
+        <option value="large">Large</option>
+        <option value="small">Small</option>
+      </select>
+    </div>
+    <div class="row"><label for="intervalSec">Replace interval (sec):</label>
+      <input id="intervalSec" type="number" min="2" max="30" value="5" />
+    </div>
+    <button id="startBtn">Start Slideshow</button>
+    <div id="status">No images loaded.</div>
+    <div id="help">Tip: in Quest Browser, tap "Choose Files" and pick images from Gallery or Downloads.</div>
+    <div id="diagramNote">Included diagram: <a href="assets/diagram.png" target="_blank">diagram.png</a></div>
+  </div>
+
+  <a-scene embedded vr-mode-ui="enabled: true">
+    <a-sphere radius="10" segments-height="32" segments-width="64" color="#070707" scale="-1 1 1"></a-sphere>
+    <a-entity id="cameraRig">
+      <a-entity id="camera" camera look-controls position="0 0 0"></a-entity>
+    </a-entity>
+    <a-entity id="panels"></a-entity>
+  </a-scene>
+
+  <script src="js/app.js"></script>
+</body>
+</html>
