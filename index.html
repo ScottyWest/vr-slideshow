@@ -2,80 +2,87 @@
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>VR Slideshow (Robust Load)</title>
+    <title>VR Slideshow — Base64 textures, 10 panels</title>
 
-    <!-- A-Frame -->
+    <!-- A-Frame + look-at -->
     <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
-    <!-- look-at helper -->
     <script src="https://unpkg.com/aframe-look-at-component@1.0.0/dist/aframe-look-at-component.min.js"></script>
 
     <style>
-      body { background:#111; color:#eee; font-family:Arial,Helvetica,sans-serif; padding:18px; }
+      body { background:#0b0b0b; color:#eee; font-family:Arial,Helvetica,sans-serif; padding:18px; }
       h2 { margin:0 0 8px 0; }
-      #controls { max-width:560px; }
-      #imageList img { width:70px; height:70px; object-fit:cover; margin:6px; border-radius:4px; border:2px solid #444; }
-      .thumbWrapper { display:inline-block; position:relative; margin-right:6px; }
-      .removeBtn { position:absolute; top:-6px; right:-6px; background:#c33; color:#fff; border:none; width:20px; height:20px; border-radius:50%; cursor:pointer; }
-      button, select, input { font-size:14px; }
+      #controls { max-width:720px; }
+      #imageList { margin-top:12px; }
+      .thumbWrapper { display:inline-block; position:relative; margin:6px; }
+      .thumbWrapper img { width:84px; height:84px; object-fit:cover; border-radius:6px; border:2px solid #444; }
+      .removeBtn { position:absolute; top:-6px; right:-6px; background:#c33; color:#fff; border:none; width:22px; height:22px; border-radius:50%; cursor:pointer; }
+      button, select, input { font-size:14px; padding:6px; }
       #status { margin-top:10px; color:#bbb; font-size:13px; }
-      #debug { color: #ffb; font-size:13px; margin-top:10px; }
+      #debug { color:#ffd47a; font-size:13px; margin-top:10px; }
+      a { color:#66aaff; }
     </style>
   </head>
 
   <body>
     <div id="controls">
-      <h2>Select Photos for Slideshow</h2>
+      <h2>VR Slideshow — Select Photos</h2>
 
+      <!-- Single-file picker (Quest picks one at a time) -->
       <input id="filePicker" type="file" accept="image/*" />
-      <p style="margin:8px 0 4px 0;">
+      <span style="margin-left:12px;">Tip: repeat <strong>Choose Files</strong> to add more images (Quest only picks one at a time).</span>
+
+      <p style="margin-top:8px;">
         Panel size:
         <select id="panelSize">
-          <option value="medium" selected>Medium</option>
-          <option value="small">Small</option>
+          <option value="medium" selected>Medium (recommended)</option>
           <option value="large">Large</option>
+          <option value="small">Small</option>
         </select>
         &nbsp;&nbsp;
         Replace interval (sec):
-        <input id="replaceInterval" type="number" min="1" max="30" value="5" style="width:60px;" />
+        <input id="replaceInterval" type="number" min="1" max="30" value="5" style="width:70px;" />
+      </p>
+
+      <p>
+        Visible panels: <strong>10</strong> (fixed)
       </p>
 
       <button id="startBtn" disabled>Start Slideshow</button>
-      <div id="status">No images selected yet. Tip: select one file at a time (Quest picker limits).</div>
+      <div id="status">No images selected yet.</div>
 
-      <div id="imageList" style="margin-top:12px;"></div>
+      <div id="imageList" aria-live="polite"></div>
 
       <div id="debug" aria-live="polite"></div>
 
-      <p style="margin-top:10px;font-size:13px;color:#aaa;">
-        Tip: In Quest Browser, tap "Choose Files" and pick images from Gallery or Downloads.<br>
-        Included diagram (for reference): <a href="assets/diagram.png" target="_blank">diagram.png</a><br>
-        (Local diagram backup path on the host machine: <code>/mnt/data/A_2D_digital_illustration_demonstrates_a_virtual_r.png</code>)
+      <p style="margin-top:12px;font-size:13px;color:#aaa;">
+        When ready: press <strong>Start Slideshow</strong>. The page will prepare textures and then prompt to enter VR.<br>
+        Diagram link (repo asset): <a href="assets/diagram.png" target="_blank">assets/diagram.png</a><br>
+        (Original upload path for reference: <code>/mnt/data/A_2D_digital_illustration_demonstrates_a_virtual_r.png</code>)
       </p>
     </div>
 
-    <!-- The VR scene is present but hidden until the slideshow starts -->
-    <a-scene id="vrScene" embedded vr-mode-ui="enabled: true" style="display:none; height:100vh;">
+    <!-- VR scene - hidden until Start triggers it -->
+    <a-scene id="vrScene" embedded vr-mode-ui="enabled:true" style="display:none; height:100vh;">
       <a-entity id="cameraRig">
         <a-entity id="camera" camera look-controls position="0 1.6 0"></a-entity>
       </a-entity>
 
       <!-- big dark interior sphere -->
-      <a-sphere radius="20" segments-height="32" segments-width="64" scale="-1 1 1" color="#000"></a-sphere>
+      <a-sphere radius="30" segments-height="48" segments-width="64" scale="-1 1 1" color="#000"></a-sphere>
 
-      <!-- panel container -->
       <a-entity id="panelContainer"></a-entity>
 
-      <!-- in-VR debug text (hidden unless errors happen) -->
-      <a-entity id="vrDebug" position="-1 2 -2" visible="false">
-        <a-plane width="2.4" height="1.2" color="#000" opacity="0.75"></a-plane>
-        <a-text id="vrDebugText" value="" position="-1.1 0.45 0.01" align="left" wrap-count="30" color="#ffb" ></a-text>
+      <!-- in-VR debug if needed -->
+      <a-entity id="vrDebug" visible="false" position="-1.6 2 -2">
+        <a-plane width="3.2" height="1.4" color="#000" opacity="0.8"></a-plane>
+        <a-text id="vrDebugText" value="" position="-1.48 0.52 0.01" align="left" wrap-count="30" color="#ffd47a"></a-text>
       </a-entity>
     </a-scene>
 
     <script>
-      // Configuration
-      const VISIBLE_PANELS = 8;
-
+      // Config
+      const VISIBLE_PANELS = 10;
+      const DEFAULT_PANEL_SIZES = { small: 4.0, medium: 8.0, large: 12.0 }; // approx. 2-3x larger than before
       // DOM
       const filePicker = document.getElementById('filePicker');
       const startBtn = document.getElementById('startBtn');
@@ -84,243 +91,231 @@
       const debugEl = document.getElementById('debug');
 
       // State
-      let fileObjects = [];   // File objects selected
-      let objectUrls = [];    // URL.createObjectURL blobs for textures
-      let imageMeta = [];     // {url, width, height}
-      let panelEntities = []; // active a-plane elements
+      let fileList = [];    // File objects
+      let dataUrls = [];    // Base64 data URLs
+      let metaList = [];    // { url: dataUrl, width, height }
+      let panelEntities = [];
       let replaceTimer = null;
 
       // Helpers
-      function logDebug(msg) {
+      function log(msg) {
         console.log(msg);
-        debugEl.textContent = msg;
-        // also show in-VR debug text if present
+        debugEl.textContent = String(msg).slice(0, 800);
+        // also set VR debug text (if visible)
         try {
-          const vrDebug = document.getElementById('vrDebug');
           const vrDebugText = document.getElementById('vrDebugText');
-          if (vrDebug && vrDebugText) {
-            vrDebugText.setAttribute('value', String(msg).slice(0, 700));
-            vrDebug.setAttribute('visible', true);
-          }
-        } catch(e) {}
-      }
-
-      function clearDebug() {
-        debugEl.textContent = '';
-        try {
           const vrDebug = document.getElementById('vrDebug');
-          if (vrDebug) vrDebug.setAttribute('visible', false);
-        } catch(e) {}
+          if (vrDebugText && vrDebug) {
+            vrDebugText.setAttribute('value', String(msg).slice(0, 700));
+          }
+        } catch(e){}
       }
+      function clearLog(){ debugEl.textContent = ''; try{ document.getElementById('vrDebug').setAttribute('visible', false);}catch(e){} }
 
-      // Read a single File blob and get its natural dimensions via Image (safe on Quest)
-      function loadFileAsImage(file) {
+      // Convert File -> Base64 data URL using FileReader
+      function fileToDataURL(file) {
         return new Promise((resolve, reject) => {
-          const url = URL.createObjectURL(file);
-          const img = new Image();
-          img.onload = () => {
-            resolve({ url, width: img.naturalWidth, height: img.naturalHeight });
-            // Do NOT revokeObjectURL here because A-Frame will use the URL for texture
+          const reader = new FileReader();
+          reader.onerror = () => reject(new Error('FileReader error'));
+          reader.onload = () => {
+            resolve(reader.result);
           };
-          img.onerror = (err) => {
-            URL.revokeObjectURL(url);
-            reject(new Error('Image load failed: ' + file.name));
-          };
-          img.src = url;
+          reader.readAsDataURL(file);
         });
       }
 
-      // UI: add thumbnail with remove button
-      function addThumb(meta, idx) {
-        const wrapper = document.createElement('div');
-        wrapper.className = 'thumbWrapper';
-        wrapper.dataset.idx = idx;
+      // Load image (Image element) to determine natural size — safe pre-VR
+      function getImageDimensionsFromDataURL(dataUrl) {
+        return new Promise((resolve, reject) => {
+          const img = new Image();
+          img.onload = () => {
+            resolve({ width: img.naturalWidth, height: img.naturalHeight });
+          };
+          img.onerror = (e) => reject(new Error('image decode failed'));
+          img.src = dataUrl;
+        });
+      }
 
+      // UI: add thumbnail
+      function addThumb(dataUrl, idx) {
+        const w = document.createElement('div');
+        w.className = 'thumbWrapper';
+        w.dataset.idx = idx;
         const img = document.createElement('img');
-        img.src = meta.url;
-        wrapper.appendChild(img);
-
+        img.src = dataUrl;
+        w.appendChild(img);
         const rm = document.createElement('button');
         rm.className = 'removeBtn';
         rm.innerText = '×';
         rm.title = 'Remove';
         rm.onclick = () => removeImage(idx);
-        wrapper.appendChild(rm);
-
-        imageListDiv.appendChild(wrapper);
+        w.appendChild(rm);
+        imageListDiv.appendChild(w);
       }
 
-      // rebuild thumbnails after remove
+      // rebuild thumbnails
       function rebuildThumbs() {
         imageListDiv.innerHTML = '';
-        imageMeta.forEach((m, i) => addThumb(m, i));
+        metaList.forEach((m,i) => addThumb(m.url, i));
       }
 
       function removeImage(index) {
-        // remove file object and URL and meta
-        try {
-          if (objectUrls[index]) URL.revokeObjectURL(objectUrls[index]);
-        } catch(e) {}
-        fileObjects.splice(index, 1);
-        objectUrls.splice(index, 1);
-        imageMeta.splice(index, 1);
+        metaList.splice(index, 1);
+        fileList.splice(index, 1);
+        dataUrls.splice(index, 1);
         rebuildThumbs();
-        statusEl.textContent = `${imageMeta.length} images selected.`;
-        startBtn.disabled = imageMeta.length < 1;
+        statusEl.textContent = `${metaList.length} images selected.`;
+        startBtn.disabled = metaList.length < 1;
       }
 
-      // file picker: single-file selection at a time
+      // file picker handler: single-file selection at a time on Quest
       filePicker.addEventListener('change', async (evt) => {
         const files = Array.from(filePicker.files || []);
         if (!files.length) return;
         const f = files[0];
-        statusEl.textContent = `Loading ${f.name}...`;
+        statusEl.textContent = `Converting ${f.name}...`;
         try {
-          const meta = await loadFileAsImage(f);
-          fileObjects.push(f);
-          objectUrls.push(meta.url);
-          imageMeta.push(meta);
-          addThumb(meta, imageMeta.length - 1);
-          statusEl.textContent = `${imageMeta.length} images selected. (Tap Start when ready)`;
-          startBtn.disabled = imageMeta.length < 1;
-          clearDebug();
+          const dataUrl = await fileToDataURL(f);       // Base64 conversion
+          const dims = await getImageDimensionsFromDataURL(dataUrl);
+          fileList.push(f);
+          dataUrls.push(dataUrl);
+          metaList.push({ url: dataUrl, width: dims.width, height: dims.height });
+          addThumb(dataUrl, metaList.length - 1);
+          statusEl.textContent = `${metaList.length} images selected.`;
+          startBtn.disabled = metaList.length < 1;
+          clearLog();
         } catch (err) {
-          logDebug('Image load error: ' + (err.message || err));
+          log('Error converting image: ' + (err && err.message ? err.message : err));
         } finally {
-          // reset input so same file can be re-selected if needed
+          // Reset input so same file can be selected again
           filePicker.value = '';
         }
       });
 
-      // Create a panel a-plane entity (using preloaded object URL)
-      function createPanelEntity(meta, panelWidth) {
-        const radius = 19;
-        const theta = Math.random() * Math.PI * 2;
-        const phi = Math.acos(2*Math.random()-1);
+      // Create a panel entity (with given meta data and panelWidth)
+      function createPanel(meta, panelWidth) {
+        const radius = 25;
+        // random spherical position
+        const u = Math.random();
+        const v = Math.random();
+        const theta = 2 * Math.PI * u;
+        const phi = Math.acos(2*v - 1);
         const x = radius * Math.sin(phi) * Math.cos(theta);
         const y = radius * Math.cos(phi);
         const z = radius * Math.sin(phi) * Math.sin(theta);
-        // slight radial depth offset
-        const depthOffset = (Math.random() - 0.5) * 0.8;
-        const finalX = x * (1 + depthOffset/20);
-        const finalY = y * (1 + depthOffset/20);
-        const finalZ = z * (1 + depthOffset/20);
+        // small depth offset
+        const depthOffset = (Math.random()-0.5) * 1.0;
+        const px = x * (1 + depthOffset/25);
+        const py = y * (1 + depthOffset/25);
+        const pz = z * (1 + depthOffset/25);
 
         const plane = document.createElement('a-plane');
 
         const aspect = meta.width && meta.height ? meta.width/meta.height : 1.5;
         let width = panelWidth;
-        let height = Math.max(0.5, panelWidth / aspect);
+        let height = Math.max(1.0, panelWidth / aspect);
 
         plane.setAttribute('width', width);
         plane.setAttribute('height', height);
-        plane.setAttribute('position', `${finalX} ${finalY} ${finalZ}`);
-        plane.setAttribute('look-at', '#camera'); // the look-at component is loaded above
+        plane.setAttribute('position', `${px} ${py} ${pz}`);
+        plane.setAttribute('look-at', '#camera');
         plane.setAttribute('material', `src: ${meta.url}; side:double; shader:flat;`);
-        // ken burns: small position oscillation + scale
-        const dur = Math.floor(18000 + Math.random()*12000);
-        plane.setAttribute('animation__pos', `property: position; dur: ${dur}; dir: alternate; loop: true; to: ${finalX + (Math.random()*0.6-0.3)} ${finalY + (Math.random()*0.4-0.2)} ${finalZ}`);
-        const zoomTo = 0.95 + Math.random()*0.25;
-        plane.setAttribute('animation__scale', `property: scale; to: ${zoomTo} ${zoomTo} 1; dur: ${dur}; dir: alternate; loop: true;`);
+
+        // Ken Burns style (long, smooth)
+        const dur = Math.floor(20000 + Math.random()*20000);
+        plane.setAttribute('animation__pos', `property: position; dur: ${dur}; dir: alternate; loop: true; to: ${px + (Math.random()*1-0.5)} ${py + (Math.random()*0.8-0.4)} ${pz}`);
+        const scaleTo = 0.95 + Math.random()*0.25;
+        plane.setAttribute('animation__scale', `property: scale; to: ${scaleTo} ${scaleTo} 1; dur: ${dur}; dir: alternate; loop: true;`);
         return plane;
       }
 
-      // Build initial panels using the selected images (do not enter VR yet)
-      async function buildPanels(panelWidth) {
+      // Build the visible panels before entering VR (ensures textures are applied safely)
+      async function buildVisiblePanels(panelWidth) {
         const container = document.getElementById('panelContainer');
-        // clear old
-        panelEntities.forEach(e => { try{ e.parentNode.removeChild(e); }catch(e){}});
+        // clear any old
+        panelEntities.forEach(e => { try{ e.parentNode.removeChild(e);}catch(e){} });
         panelEntities = [];
-        // If fewer images than VISIBLE_PANELS, we will reuse them randomly
-        const count = Math.min(VISIBLE_PANELS, imageMeta.length);
-        for (let i=0;i<count;i++) {
-          const meta = imageMeta[i % imageMeta.length];
-          const ent = createPanelEntity(meta, panelWidth);
+        // Choose initial set: use first N or random picks (ensure variety)
+        for (let i=0; i < Math.min(VISIBLE_PANELS, metaList.length); i++) {
+          const meta = metaList[i % metaList.length];
+          const ent = createPanel(meta, panelWidth);
           container.appendChild(ent);
           panelEntities.push(ent);
         }
-        // If fewer than VISIBLE_PANELS, fill remaining
+        // if metaList < VISIBLE_PANELS, add random duplicates to reach count
         while (panelEntities.length < VISIBLE_PANELS) {
-          const meta = imageMeta[Math.floor(Math.random()*imageMeta.length)];
-          const ent = createPanelEntity(meta, panelWidth);
+          const meta = metaList[Math.floor(Math.random()*metaList.length)];
+          const ent = createPanel(meta, panelWidth);
           container.appendChild(ent);
           panelEntities.push(ent);
         }
       }
 
-      // Replace one panel with a new random image from pool
-      function replaceRandomPanel(panelWidth) {
-        if (!panelEntities.length || !imageMeta.length) return;
+      function replaceOne(panelWidth) {
+        if (!panelEntities.length || !metaList.length) return;
         const idx = Math.floor(Math.random()*panelEntities.length);
         const old = panelEntities[idx];
         try{ old.parentNode.removeChild(old); }catch(e){}
-        const meta = imageMeta[Math.floor(Math.random()*imageMeta.length)];
-        const newEnt = createPanelEntity(meta, panelWidth);
-        document.getElementById('panelContainer').appendChild(newEnt);
-        panelEntities[idx] = newEnt;
+        const meta = metaList[Math.floor(Math.random()*metaList.length)];
+        const ent = createPanel(meta, panelWidth);
+        document.getElementById('panelContainer').appendChild(ent);
+        panelEntities[idx] = ent;
       }
 
-      // Start the entire slideshow: build panels, then enter VR (user gesture)
+      // Main Start - builds panels (using Base64 textures) then enters VR
       startBtn.addEventListener('click', async () => {
         startBtn.disabled = true;
-        statusEl.textContent = 'Preparing panels...';
-        clearDebug();
+        statusEl.textContent = 'Preparing slideshow — building panels...';
+        clearLog();
 
-        // choose panel width from UI
-        const size = document.getElementById('panelSize').value;
-        const panelWidth = size === 'small' ? 2.0 : size === 'large' ? 4.5 : 3.2;
+        if (!metaList.length) { statusEl.textContent = 'Select at least 1 image first.'; startBtn.disabled = false; return; }
+
+        const sizeSetting = document.getElementById('panelSize').value;
+        const panelWidth = DEFAULT_PANEL_SIZES[sizeSetting] || DEFAULT_PANEL_SIZES.medium;
 
         try {
-          // Build panels on the normal DOM before entering VR (this avoids in-VR texture creation problems)
-          await buildPanels(panelWidth);
+          await buildVisiblePanels(panelWidth);
         } catch (err) {
-          logDebug('Panel build error: ' + err);
+          log('Error building panels: ' + (err && err.message ? err.message : err));
           startBtn.disabled = false;
           return;
         }
 
-        statusEl.textContent = 'Entering VR...';
-        // show the scene and request VR (this must be a direct result of the user gesture)
+        // Show VR scene and request enterVR
         document.getElementById('controls').style.display = 'none';
         const scene = document.getElementById('vrScene');
         scene.style.display = 'block';
 
-        // give the browser a small moment to ensure DOM changes are registered
+        // Small timeout to ensure DOM commits
         setTimeout(async () => {
           try {
-            // Enter VR - this should be allowed because it's within the user's click handler
-            await scene.enterVR();
+            await scene.enterVR(); // user gesture — allowed here
           } catch (err) {
-            // if entering VR fails, show debug on the 2D page
-            logDebug('Failed to enter VR: ' + (err && err.message ? err.message : err));
-            // show the page controls again so user can retry
+            log('Failed to enter VR: ' + (err && err.message ? err.message : err));
             document.getElementById('controls').style.display = '';
             scene.style.display = 'none';
             startBtn.disabled = false;
             return;
           }
 
-          // start the replace timer (only after VR entrance succeeded)
-          const replaceSec = Math.max(1, parseFloat(document.getElementById('replaceInterval').value) || 5);
+          // start replacement timer after VR entered
+          const interval = Math.max(1, parseFloat(document.getElementById('replaceInterval').value)||5);
           if (replaceTimer) clearInterval(replaceTimer);
           replaceTimer = setInterval(() => {
             try {
-              replaceRandomPanel(panelWidth);
-            } catch (err) {
-              logDebug('Replace error: ' + err);
+              replaceOne(panelWidth);
+            } catch (e) {
+              log('Replace error: ' + e);
             }
-          }, replaceSec * 1000);
+          }, interval * 1000);
 
           statusEl.textContent = 'Slideshow running.';
-          clearDebug(); // hide debug if everything is fine
-        }, 80);
+          clearLog();
+        }, 150);
       });
 
-      // On page unload cleanup object URLs and timers
+      // Cleanup on unload
       window.addEventListener('beforeunload', () => {
-        try {
-          objectUrls.forEach(u => URL.revokeObjectURL(u));
-        } catch(e){}
         if (replaceTimer) clearInterval(replaceTimer);
       });
 
