@@ -2,292 +2,328 @@
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>VR Slideshow</title>
+    <title>VR Slideshow (Robust Load)</title>
 
     <!-- A-Frame -->
     <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+    <!-- look-at helper -->
     <script src="https://unpkg.com/aframe-look-at-component@1.0.0/dist/aframe-look-at-component.min.js"></script>
 
-    <!-- Page style -->
     <style>
-      body {
-        background: #111;
-        color: #eee;
-        font-family: Arial, sans-serif;
-        padding: 20px;
-      }
-      h2 {
-        margin-bottom: 5px;
-      }
-
-      #imageList img {
-        width: 70px;
-        height: 70px;
-        object-fit: cover;
-        margin: 5px;
-        border: 2px solid #555;
-        border-radius: 4px;
-      }
-
-      .thumbWrapper {
-        display: inline-block;
-        position: relative;
-      }
-
-      .removeBtn {
-        position: absolute;
-        top: -6px;
-        right: -6px;
-        background: red;
-        color: #fff;
-        border: none;
-        font-size: 14px;
-        width: 20px;
-        height: 20px;
-        border-radius: 50%;
-        cursor: pointer;
-      }
-
-      #startBtn {
-        margin-top: 15px;
-        padding: 8px 16px;
-        background: #eee;
-        color: #111;
-        border: none;
-        cursor: pointer;
-        font-size: 16px;
-        border-radius: 4px;
-      }
-
-      #startBtn:disabled {
-        opacity: 0.4;
-        cursor: default;
-      }
-
-      select,
-      input {
-        font-size: 16px;
-      }
-
-      a {
-        color: #66aaff;
-      }
+      body { background:#111; color:#eee; font-family:Arial,Helvetica,sans-serif; padding:18px; }
+      h2 { margin:0 0 8px 0; }
+      #controls { max-width:560px; }
+      #imageList img { width:70px; height:70px; object-fit:cover; margin:6px; border-radius:4px; border:2px solid #444; }
+      .thumbWrapper { display:inline-block; position:relative; margin-right:6px; }
+      .removeBtn { position:absolute; top:-6px; right:-6px; background:#c33; color:#fff; border:none; width:20px; height:20px; border-radius:50%; cursor:pointer; }
+      button, select, input { font-size:14px; }
+      #status { margin-top:10px; color:#bbb; font-size:13px; }
+      #debug { color: #ffb; font-size:13px; margin-top:10px; }
     </style>
   </head>
 
   <body>
-    <h2>Select Photos for Slideshow</h2>
+    <div id="controls">
+      <h2>Select Photos for Slideshow</h2>
 
-    <!-- Single-file picker -->
-    <input
-      id="filePicker"
-      type="file"
-      accept="image/*"
-      style="margin-bottom: 12px;"
-    />
+      <input id="filePicker" type="file" accept="image/*" />
+      <p style="margin:8px 0 4px 0;">
+        Panel size:
+        <select id="panelSize">
+          <option value="medium" selected>Medium</option>
+          <option value="small">Small</option>
+          <option value="large">Large</option>
+        </select>
+        &nbsp;&nbsp;
+        Replace interval (sec):
+        <input id="replaceInterval" type="number" min="1" max="30" value="5" style="width:60px;" />
+      </p>
 
-    <br />
+      <button id="startBtn" disabled>Start Slideshow</button>
+      <div id="status">No images selected yet. Tip: select one file at a time (Quest picker limits).</div>
 
-    <label>Panel size:</label>
-    <select id="panelSize">
-      <option value="medium" selected>Medium (recommended)</option>
-      <option value="small">Small</option>
-      <option value="large">Large</option>
-    </select>
+      <div id="imageList" style="margin-top:12px;"></div>
 
-    <br /><br />
+      <div id="debug" aria-live="polite"></div>
 
-    <label>Replace interval (sec):</label>
-    <input id="replaceInterval" type="number" value="5" min="1" max="30" />
+      <p style="margin-top:10px;font-size:13px;color:#aaa;">
+        Tip: In Quest Browser, tap "Choose Files" and pick images from Gallery or Downloads.<br>
+        Included diagram (for reference): <a href="assets/diagram.png" target="_blank">diagram.png</a><br>
+        (Local diagram backup path on the host machine: <code>/mnt/data/A_2D_digital_illustration_demonstrates_a_virtual_r.png</code>)
+      </p>
+    </div>
 
-    <br /><br />
+    <!-- The VR scene is present but hidden until the slideshow starts -->
+    <a-scene id="vrScene" embedded vr-mode-ui="enabled: true" style="display:none; height:100vh;">
+      <a-entity id="cameraRig">
+        <a-entity id="camera" camera look-controls position="0 1.6 0"></a-entity>
+      </a-entity>
 
-    <button id="startBtn" disabled>Start Slideshow</button>
+      <!-- big dark interior sphere -->
+      <a-sphere radius="20" segments-height="32" segments-width="64" scale="-1 1 1" color="#000"></a-sphere>
 
-    <p style="margin-top: 10px;">Selected images:</p>
-    <div id="imageList"></div>
-
-    <p style="margin-top: 20px; font-size: 14px;">
-      Tip: In Quest Browser, tap “Choose Files” to pick images from Gallery or Downloads.<br />
-      Included diagram: <a href="assets/diagram.png" target="_blank">diagram.png</a>
-    </p>
-
-    <!-- VR Scene -->
-    <a-scene
-      id="vrScene"
-      embedded
-      vr-mode-ui="enabled: true"
-      style="display:none; height: 100vh;"
-    >
-      <!-- Camera -->
-      <a-entity position="0 1.6 0" camera look-controls></a-entity>
-
-      <!-- Dark background sphere -->
-      <a-entity
-        geometry="primitive: sphere; radius: 20; segmentsWidth: 64; segmentsHeight: 64;"
-        material="color: #000; side: back;"
-      ></a-entity>
-
-      <!-- Image panels container -->
+      <!-- panel container -->
       <a-entity id="panelContainer"></a-entity>
+
+      <!-- in-VR debug text (hidden unless errors happen) -->
+      <a-entity id="vrDebug" position="-1 2 -2" visible="false">
+        <a-plane width="2.4" height="1.2" color="#000" opacity="0.75"></a-plane>
+        <a-text id="vrDebugText" value="" position="-1.1 0.45 0.01" align="left" wrap-count="30" color="#ffb" ></a-text>
+      </a-entity>
     </a-scene>
 
-    <!-- Logic -->
     <script>
-      const filePicker = document.getElementById("filePicker");
-      const startBtn = document.getElementById("startBtn");
-      const imageListDiv = document.getElementById("imageList");
+      // Configuration
+      const VISIBLE_PANELS = 8;
 
-      let imageFiles = []; // actual File objects
-      let imageURLs = [];  // generated URL.createObjectURL()
+      // DOM
+      const filePicker = document.getElementById('filePicker');
+      const startBtn = document.getElementById('startBtn');
+      const imageListDiv = document.getElementById('imageList');
+      const statusEl = document.getElementById('status');
+      const debugEl = document.getElementById('debug');
 
-      //------------------------------------------------------------------
-      // Add images one at a time
-      //------------------------------------------------------------------
-      filePicker.addEventListener("change", () => {
-        if (filePicker.files.length === 0) return;
-        const file = filePicker.files[0];
+      // State
+      let fileObjects = [];   // File objects selected
+      let objectUrls = [];    // URL.createObjectURL blobs for textures
+      let imageMeta = [];     // {url, width, height}
+      let panelEntities = []; // active a-plane elements
+      let replaceTimer = null;
 
-        imageFiles.push(file);
+      // Helpers
+      function logDebug(msg) {
+        console.log(msg);
+        debugEl.textContent = msg;
+        // also show in-VR debug text if present
+        try {
+          const vrDebug = document.getElementById('vrDebug');
+          const vrDebugText = document.getElementById('vrDebugText');
+          if (vrDebug && vrDebugText) {
+            vrDebugText.setAttribute('value', String(msg).slice(0, 700));
+            vrDebug.setAttribute('visible', true);
+          }
+        } catch(e) {}
+      }
 
-        const url = URL.createObjectURL(file);
-        imageURLs.push(url);
+      function clearDebug() {
+        debugEl.textContent = '';
+        try {
+          const vrDebug = document.getElementById('vrDebug');
+          if (vrDebug) vrDebug.setAttribute('visible', false);
+        } catch(e) {}
+      }
 
-        addThumbnail(url, imageURLs.length - 1);
+      // Read a single File blob and get its natural dimensions via Image (safe on Quest)
+      function loadFileAsImage(file) {
+        return new Promise((resolve, reject) => {
+          const url = URL.createObjectURL(file);
+          const img = new Image();
+          img.onload = () => {
+            resolve({ url, width: img.naturalWidth, height: img.naturalHeight });
+            // Do NOT revokeObjectURL here because A-Frame will use the URL for texture
+          };
+          img.onerror = (err) => {
+            URL.revokeObjectURL(url);
+            reject(new Error('Image load failed: ' + file.name));
+          };
+          img.src = url;
+        });
+      }
 
-        startBtn.disabled = imageURLs.length < 1; // change to 8 later if desired
-      });
+      // UI: add thumbnail with remove button
+      function addThumb(meta, idx) {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'thumbWrapper';
+        wrapper.dataset.idx = idx;
 
-      //------------------------------------------------------------------
-      // Show thumbnail + remove button
-      //------------------------------------------------------------------
-      function addThumbnail(url, index) {
-        const wrapper = document.createElement("div");
-        wrapper.className = "thumbWrapper";
-        wrapper.dataset.index = index;
-
-        const img = document.createElement("img");
-        img.src = url;
-
-        const remove = document.createElement("button");
-        remove.className = "removeBtn";
-        remove.textContent = "×";
-
-        remove.onclick = () => removeImage(index);
-
+        const img = document.createElement('img');
+        img.src = meta.url;
         wrapper.appendChild(img);
-        wrapper.appendChild(remove);
+
+        const rm = document.createElement('button');
+        rm.className = 'removeBtn';
+        rm.innerText = '×';
+        rm.title = 'Remove';
+        rm.onclick = () => removeImage(idx);
+        wrapper.appendChild(rm);
+
         imageListDiv.appendChild(wrapper);
       }
 
-      //------------------------------------------------------------------
-      // Remove an image
-      //------------------------------------------------------------------
-      function removeImage(index) {
-        imageFiles.splice(index, 1);
-        imageURLs.splice(index, 1);
-
-        // Rebuild thumbnail list
-        imageListDiv.innerHTML = "";
-        imageURLs.forEach((u, i) => addThumbnail(u, i));
-
-        startBtn.disabled = imageURLs.length < 1; // change to 8 when needed
+      // rebuild thumbnails after remove
+      function rebuildThumbs() {
+        imageListDiv.innerHTML = '';
+        imageMeta.forEach((m, i) => addThumb(m, i));
       }
 
-      //------------------------------------------------------------------
-      // Start the VR slideshow
-      //------------------------------------------------------------------
-      startBtn.addEventListener("click", () => {
-        document.body.style.display = "none";
-        document.getElementById("vrScene").style.display = "block";
+      function removeImage(index) {
+        // remove file object and URL and meta
+        try {
+          if (objectUrls[index]) URL.revokeObjectURL(objectUrls[index]);
+        } catch(e) {}
+        fileObjects.splice(index, 1);
+        objectUrls.splice(index, 1);
+        imageMeta.splice(index, 1);
+        rebuildThumbs();
+        statusEl.textContent = `${imageMeta.length} images selected.`;
+        startBtn.disabled = imageMeta.length < 1;
+      }
 
-        startVRSlideshow();
+      // file picker: single-file selection at a time
+      filePicker.addEventListener('change', async (evt) => {
+        const files = Array.from(filePicker.files || []);
+        if (!files.length) return;
+        const f = files[0];
+        statusEl.textContent = `Loading ${f.name}...`;
+        try {
+          const meta = await loadFileAsImage(f);
+          fileObjects.push(f);
+          objectUrls.push(meta.url);
+          imageMeta.push(meta);
+          addThumb(meta, imageMeta.length - 1);
+          statusEl.textContent = `${imageMeta.length} images selected. (Tap Start when ready)`;
+          startBtn.disabled = imageMeta.length < 1;
+          clearDebug();
+        } catch (err) {
+          logDebug('Image load error: ' + (err.message || err));
+        } finally {
+          // reset input so same file can be re-selected if needed
+          filePicker.value = '';
+        }
       });
 
-      //------------------------------------------------------------------
-      // VR slideshow logic
-      //------------------------------------------------------------------
-      function startVRSlideshow() {
-        const container = document.getElementById("panelContainer");
+      // Create a panel a-plane entity (using preloaded object URL)
+      function createPanelEntity(meta, panelWidth) {
+        const radius = 19;
+        const theta = Math.random() * Math.PI * 2;
+        const phi = Math.acos(2*Math.random()-1);
+        const x = radius * Math.sin(phi) * Math.cos(theta);
+        const y = radius * Math.cos(phi);
+        const z = radius * Math.sin(phi) * Math.sin(theta);
+        // slight radial depth offset
+        const depthOffset = (Math.random() - 0.5) * 0.8;
+        const finalX = x * (1 + depthOffset/20);
+        const finalY = y * (1 + depthOffset/20);
+        const finalZ = z * (1 + depthOffset/20);
 
-        const panelSize = document.getElementById("panelSize").value;
-        const replaceSeconds =
-          parseFloat(document.getElementById("replaceInterval").value) || 5;
+        const plane = document.createElement('a-plane');
 
-        const panelWidth =
-          panelSize === "small"
-            ? 2.0
-            : panelSize === "large"
-            ? 4.5
-            : 3.2; // medium
+        const aspect = meta.width && meta.height ? meta.width/meta.height : 1.5;
+        let width = panelWidth;
+        let height = Math.max(0.5, panelWidth / aspect);
 
-        const maxPanels = 8;
-        const activePanels = [];
-
-        function randomPos() {
-          const radius = 19;
-          const theta = Math.random() * Math.PI * 2;
-          const phi = Math.random() * Math.PI;
-          const x = radius * Math.sin(phi) * Math.cos(theta);
-          const y = radius * Math.cos(phi);
-          const z = radius * Math.sin(phi) * Math.sin(theta);
-          return { x, y, z };
-        }
-
-        function pickImage() {
-          return imageURLs[Math.floor(Math.random() * imageURLs.length)];
-        }
-
-        function createPanel() {
-          const url = pickImage();
-          const pos = randomPos();
-          const depthOffset = (Math.random() - 0.5) * 0.8;
-          const finalPos = {
-            x: pos.x * (1 + depthOffset / 20),
-            y: pos.y * (1 + depthOffset / 20),
-            z: pos.z * (1 + depthOffset / 20),
-          };
-
-          const panel = document.createElement("a-plane");
-          panel.setAttribute("width", panelWidth);
-          panel.setAttribute("height", panelWidth * 0.66);
-          panel.setAttribute(
-            "material",
-            `src:${url}; side:double; shader:standard;`
-          );
-          panel.setAttribute(
-            "position",
-            `${finalPos.x} ${finalPos.y} ${finalPos.z}`
-          );
-          panel.setAttribute("look-at", "[camera]");
-
-          panel.setAttribute(
-            "animation__ken",
-            "property: position; loop: true; dir: alternate; dur: 5000; " +
-              `to: ${finalPos.x + (Math.random() * 1 - 0.5)} ` +
-              `${finalPos.y + (Math.random() * 1 - 0.5)} ` +
-              `${finalPos.z + (Math.random() * 1 - 0.5)}`
-          );
-
-          container.appendChild(panel);
-          activePanels.push(panel);
-        }
-
-        for (let i = 0; i < Math.min(maxPanels, imageURLs.length); i++) {
-          createPanel();
-        }
-
-        setInterval(() => {
-          if (activePanels.length === 0) return;
-
-          const idx = Math.floor(Math.random() * activePanels.length);
-          const old = activePanels[idx];
-          old.parentNode.removeChild(old);
-          activePanels.splice(idx, 1);
-
-          createPanel();
-        }, replaceSeconds * 1000);
+        plane.setAttribute('width', width);
+        plane.setAttribute('height', height);
+        plane.setAttribute('position', `${finalX} ${finalY} ${finalZ}`);
+        plane.setAttribute('look-at', '#camera'); // the look-at component is loaded above
+        plane.setAttribute('material', `src: ${meta.url}; side:double; shader:flat;`);
+        // ken burns: small position oscillation + scale
+        const dur = Math.floor(18000 + Math.random()*12000);
+        plane.setAttribute('animation__pos', `property: position; dur: ${dur}; dir: alternate; loop: true; to: ${finalX + (Math.random()*0.6-0.3)} ${finalY + (Math.random()*0.4-0.2)} ${finalZ}`);
+        const zoomTo = 0.95 + Math.random()*0.25;
+        plane.setAttribute('animation__scale', `property: scale; to: ${zoomTo} ${zoomTo} 1; dur: ${dur}; dir: alternate; loop: true;`);
+        return plane;
       }
+
+      // Build initial panels using the selected images (do not enter VR yet)
+      async function buildPanels(panelWidth) {
+        const container = document.getElementById('panelContainer');
+        // clear old
+        panelEntities.forEach(e => { try{ e.parentNode.removeChild(e); }catch(e){}});
+        panelEntities = [];
+        // If fewer images than VISIBLE_PANELS, we will reuse them randomly
+        const count = Math.min(VISIBLE_PANELS, imageMeta.length);
+        for (let i=0;i<count;i++) {
+          const meta = imageMeta[i % imageMeta.length];
+          const ent = createPanelEntity(meta, panelWidth);
+          container.appendChild(ent);
+          panelEntities.push(ent);
+        }
+        // If fewer than VISIBLE_PANELS, fill remaining
+        while (panelEntities.length < VISIBLE_PANELS) {
+          const meta = imageMeta[Math.floor(Math.random()*imageMeta.length)];
+          const ent = createPanelEntity(meta, panelWidth);
+          container.appendChild(ent);
+          panelEntities.push(ent);
+        }
+      }
+
+      // Replace one panel with a new random image from pool
+      function replaceRandomPanel(panelWidth) {
+        if (!panelEntities.length || !imageMeta.length) return;
+        const idx = Math.floor(Math.random()*panelEntities.length);
+        const old = panelEntities[idx];
+        try{ old.parentNode.removeChild(old); }catch(e){}
+        const meta = imageMeta[Math.floor(Math.random()*imageMeta.length)];
+        const newEnt = createPanelEntity(meta, panelWidth);
+        document.getElementById('panelContainer').appendChild(newEnt);
+        panelEntities[idx] = newEnt;
+      }
+
+      // Start the entire slideshow: build panels, then enter VR (user gesture)
+      startBtn.addEventListener('click', async () => {
+        startBtn.disabled = true;
+        statusEl.textContent = 'Preparing panels...';
+        clearDebug();
+
+        // choose panel width from UI
+        const size = document.getElementById('panelSize').value;
+        const panelWidth = size === 'small' ? 2.0 : size === 'large' ? 4.5 : 3.2;
+
+        try {
+          // Build panels on the normal DOM before entering VR (this avoids in-VR texture creation problems)
+          await buildPanels(panelWidth);
+        } catch (err) {
+          logDebug('Panel build error: ' + err);
+          startBtn.disabled = false;
+          return;
+        }
+
+        statusEl.textContent = 'Entering VR...';
+        // show the scene and request VR (this must be a direct result of the user gesture)
+        document.getElementById('controls').style.display = 'none';
+        const scene = document.getElementById('vrScene');
+        scene.style.display = 'block';
+
+        // give the browser a small moment to ensure DOM changes are registered
+        setTimeout(async () => {
+          try {
+            // Enter VR - this should be allowed because it's within the user's click handler
+            await scene.enterVR();
+          } catch (err) {
+            // if entering VR fails, show debug on the 2D page
+            logDebug('Failed to enter VR: ' + (err && err.message ? err.message : err));
+            // show the page controls again so user can retry
+            document.getElementById('controls').style.display = '';
+            scene.style.display = 'none';
+            startBtn.disabled = false;
+            return;
+          }
+
+          // start the replace timer (only after VR entrance succeeded)
+          const replaceSec = Math.max(1, parseFloat(document.getElementById('replaceInterval').value) || 5);
+          if (replaceTimer) clearInterval(replaceTimer);
+          replaceTimer = setInterval(() => {
+            try {
+              replaceRandomPanel(panelWidth);
+            } catch (err) {
+              logDebug('Replace error: ' + err);
+            }
+          }, replaceSec * 1000);
+
+          statusEl.textContent = 'Slideshow running.';
+          clearDebug(); // hide debug if everything is fine
+        }, 80);
+      });
+
+      // On page unload cleanup object URLs and timers
+      window.addEventListener('beforeunload', () => {
+        try {
+          objectUrls.forEach(u => URL.revokeObjectURL(u));
+        } catch(e){}
+        if (replaceTimer) clearInterval(replaceTimer);
+      });
+
     </script>
   </body>
 </html>
