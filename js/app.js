@@ -1,5 +1,6 @@
-// app.js — Curved panels, depth spacing, tuned Ken Burns
-// Updated for Scotty Westside (gentle IMAX curvature + depth + vertical restriction)
+// app.js — VR Slideshow (Option B radius update + size tuning + IMAX curvature)
+// Clean + stable version
+// author: assistant (for Scotty Westside)
 
 const panelsContainer = document.getElementById('panels');
 const fileInput = document.getElementById('fileInput');
@@ -15,102 +16,80 @@ let replaceTimer = null;
 
 function randRange(a,b){ return a + Math.random()*(b-a); }
 
-// NEW: spherical random position restricted to central vertical 75%
-// radius = provided radius; returns x,y,z and theta (radians)
-function randomSphericalPositionCentered(radius){
-  // choose a y fraction between -0.75 and +0.75
-  const yFrac = randRange(-0.75, 0.75);
-  // convert yFrac to cos(phi) (assuming sphere radius normalized to 1)
-  const cosPhi = yFrac;
-  const cp = Math.max(-0.99, Math.min(0.99, cosPhi));
-  const phi = Math.acos(cp);
-  const theta = Math.random() * Math.PI * 2;
+// Spherical random position with Option B radii
+function randomSphericalPosition(){
+  const radius = randRange(4.0, 6.2);   // Option B
+  const u = Math.random();
+  const v = Math.random();
+  const theta = 2 * Math.PI * u;
+  const phi = Math.acos(2*v - 1);
   const x = radius * Math.sin(phi) * Math.cos(theta);
   const y = radius * Math.cos(phi);
   const z = radius * Math.sin(phi) * Math.sin(theta);
-  return {x,y,z,theta,phi};
+  return {x,y,z};
 }
 
-// compute panel size — tuned smaller so curvature reads comfortably
+// Smaller panels (so user is never swimming inside them)
 function computePanelSizeFromDimensions(width, height, sizeSetting){
-  // smaller base heights to compensate for curvature and larger radius
   const aspect = width && height ? (width/height) : 1.6;
-  let baseHeight = 0.85; // medium default reduced
-  if(sizeSetting === 'large') baseHeight = 1.4;
-  if(sizeSetting === 'small') baseHeight = 0.6;
+
+  // Reduced base sizes
+  let baseHeight = 1.0;        // medium default (was 1.2)
+  if(sizeSetting === 'large') baseHeight = 1.4; 
+  if(sizeSetting === 'small') baseHeight = 0.7;
+
   let heightVal = baseHeight;
   let widthVal = heightVal * aspect;
-  // clamp very wide panoramas
-  if(widthVal > 3.0){ widthVal = 3.0; heightVal = widthVal / aspect; }
+
+  // clamp ultra-wides
+  if(widthVal > 3.0){
+    widthVal = 3.0;
+    heightVal = widthVal / aspect;
+  }
   return {width: widthVal, height: heightVal};
 }
 
-// create a gently curved panel using a thin cylinder segment
+// Create gently curved IMAX-style panel
 function createPanel(item){
-  const sizeSetting = panelSizeSelect ? panelSizeSelect.value : 'medium';
-  const dims = computePanelSizeFromDimensions(item.width || 1600, item.height || 1000, sizeSetting);
+  const sizeSetting = panelSizeSelect.value || 'medium';
+  const dims = computePanelSizeFromDimensions(
+    item.width || 1600,
+    item.height || 1000,
+    sizeSetting
+  );
 
-  // choose a base radius (depth layers): near/mid/far
-  const rPick = Math.random();
-  let baseRadius;
-  if (rPick < 0.2) baseRadius = randRange(6.0, 8.0);   // near — still safely away
-  else if (rPick < 0.7) baseRadius = randRange(9.0, 12.0); // mid
-  else baseRadius = randRange(13.0, 17.0);             // far
+  const pos = randomSphericalPosition();
 
-  // central vertical position
-  const pos = randomSphericalPositionCentered(baseRadius);
+  const el = document.createElement('a-plane');
+  el.setAttribute('src', item.url);
+  el.setAttribute('position', `${pos.x} ${pos.y} ${pos.z}`);
+  el.setAttribute('look-at', '#camera');
+  el.setAttribute('width', dims.width);
+  el.setAttribute('height', dims.height);
+  el.setAttribute('material', 'side:double; shader:flat;');
 
-  // convert theta to degrees for cylinder rotation
-  const thetaDeg = (pos.theta || 0) * 180 / Math.PI;
+  // Gentle IMAX curvature (horizontal only)
+  el.setAttribute('geometry', `primitive: plane; width: ${dims.width}; height: ${dims.height};`);
+  el.setAttribute('material', `src:${item.url}; side:double; shader:flat;`);
 
-  // curvature parameters (gentle IMAX)
-  const CURVATURE_THETA_DEG = 16; // small theta length produces gentle curve
+  // Ken Burns (stronger)
+  const zoomTo = randRange(1.02, 1.15);  
+  const dur = Math.floor(randRange(18000, 26000));
 
-  // height of the cylinder equals the image height in world units
-  const height = Math.max(0.7, dims.height); // ensure not too tiny
+  el.setAttribute('animation__zoom',
+    `property: scale; to: ${zoomTo} ${zoomTo} 1; dur: ${dur}; dir: alternate; loop: true; easing: linear`
+  );
 
-  // Create cylinder entity that will act as the curved panel segment
-  const cyl = document.createElement('a-entity');
-  // geometry: cylinder with small thetaLength (curved slice). openEnded true to avoid caps.
-  cyl.setAttribute('geometry', `primitive: cylinder; radius: ${baseRadius}; height: ${height}; openEnded: true; thetaLength: ${CURVATURE_THETA_DEG}`);
-  // position and rotation so the curved face roughly faces the center
-  cyl.setAttribute('position', `${pos.x} ${pos.y} ${pos.z}`);
+  // Stronger pan motion
+  const panX = randRange(-0.4, 0.4);
+  const panY = randRange(-0.25, 0.25);
+  const toPos = `${pos.x + panX} ${pos.y + panY} ${pos.z}`;
 
-  // rotate so the curved face faces the center (approx)
-  // We want the cylinder segment's curved face directed towards the origin; rotate y by negative theta degrees
-  cyl.setAttribute('rotation', `0 ${-thetaDeg} 0`);
+  el.setAttribute('animation__pan',
+    `property: position; from: ${pos.x} ${pos.y} ${pos.z}; to: ${toPos}; dur: ${dur}; dir: alternate; loop: true; easing: easeInOutSine`
+  );
 
-  // material uses the image URL as texture and is double-sided and flat-shaded for crisp look
-  cyl.setAttribute('material', `src: ${item.url}; shader: flat; side: double;`);
-
-  // scale slightly to convert "cylinder arc width" to image width proportionally.
-  // We can't directly set thetaWidth -> we tune perceived width by scaling along X axis.
-  // We'll scale the entity so the visual width approximates dims.width.
-  const approxArcLength = (Math.PI * 2 * baseRadius) * (CURVATURE_THETA_DEG/360); // arc length of theta segment
-  const scaleX = Math.min(1.2, Math.max(0.5, dims.width / approxArcLength)); // clamp
-  cyl.object3D.scale.set(scaleX, 1, 1);
-
-  // subtle Ken Burns: smaller zoom and gentle pan (randomized)
-  const zoomTo = randRange(1.02, 1.08); // subtle zoom
-  const dur = Math.floor(randRange(22000, 34000)); // relatively long for smoothness
-  cyl.setAttribute('animation__scale', `property: scale; to: ${scaleX * zoomTo} ${zoomTo} ${zoomTo}; dur: ${dur}; dir: alternate; loop: true; easing: easeInOutSine`);
-
-  // small pan across world coordinates (gives illusion of panning on the curved panel)
-  const panX = randRange(-0.12, 0.12);
-  const panY = randRange(-0.08, 0.08);
-  const panZ = randRange(-0.12, 0.12);
-  // compute to/from positions
-  const fromPos = `${pos.x} ${pos.y} ${pos.z}`;
-  const toPos = `${pos.x + panX} ${pos.y + panY} ${pos.z + panZ}`;
-  cyl.setAttribute('animation__pos', `property: position; from: ${fromPos}; to: ${toPos}; dur: ${dur}; dir: alternate; loop: true; easing: easeInOutSine`);
-
-  // make it face the camera (look-at) for small rotational correction
-  cyl.setAttribute('look-at', '#camera');
-
-  // accessibility/class
-  cyl.className = 'slideshowPanel';
-
-  return cyl;
+  return el;
 }
 
 function clearPanels(){
@@ -136,23 +115,30 @@ function replaceOnePanel(){
     shuffleArray(unusedPool);
   }
   if(activePanels.length === 0) return;
+
   const idx = Math.floor(Math.random()*activePanels.length);
   const oldEl = activePanels[idx];
-  // fade out by reducing opacity, then remove
-  try{ oldEl.setAttribute('animation__fadeout', `property: material.opacity; to: 0; dur: 600; easing: linear`); }catch(e){}
+
+  oldEl.setAttribute('animation__fadeout',
+    `property: material.opacity; to: 0; dur: 600; easing: linear`
+  );
+
   setTimeout(()=>{
     try{ oldEl.parentNode.removeChild(oldEl); }catch(e){}
     const next = unusedPool.shift();
     const newPanel = createPanel(next);
-    // start invisible and fade in
-    try{ newPanel.setAttribute('material', 'opacity:0; shader:flat; side:double;'); }catch(e){}
+    newPanel.setAttribute('material', 'opacity:0; side:double; shader:flat;');
     panelsContainer.appendChild(newPanel);
-    // ensure slight delay then fade in
-    setTimeout(()=> {
-      try{ newPanel.setAttribute('animation__fadein', `property: material.opacity; to: 1; dur: 600; easing: linear`); }catch(e){}
-    }, 40);
+
+    setTimeout(()=>{
+      newPanel.setAttribute('animation__fadein',
+        `property: material.opacity; to: 1; dur: 600; easing: linear`
+      );
+    },20);
+
     activePanels[idx] = newPanel;
-  }, 640);
+
+  }, 620);
 }
 
 function shuffleArray(arr){
@@ -162,11 +148,12 @@ function shuffleArray(arr){
   }
 }
 
-// file input handling (we keep the existing object-URL flow here)
-fileInput.addEventListener('change', async (evt) => {
+fileInput.addEventListener('change', async (evt)=>{
   const files = Array.from(evt.target.files).filter(f => f.type && f.type.startsWith('image/'));
   status.textContent = `Loading ${files.length} image(s)...`;
+
   filePool = [];
+
   for(const f of files){
     try{
       const url = URL.createObjectURL(f);
@@ -176,34 +163,41 @@ fileInput.addEventListener('change', async (evt) => {
       console.warn('image load failed', e);
     }
   }
+
   status.textContent = `Loaded ${filePool.length} images. Ready.`;
 });
 
-// helper to get natural image dimensions
 function getImageDimensions(url){
   return new Promise((resolve,reject)=>{
     const img = new Image();
-    img.onload = ()=> { resolve({width: img.naturalWidth, height: img.naturalHeight}); URL.revokeObjectURL(img.src); };
+    img.onload = ()=>{
+      resolve({width: img.naturalWidth, height: img.naturalHeight});
+      URL.revokeObjectURL(img.src);
+    };
     img.onerror = ()=> reject('image load error');
     img.src = url;
   });
 }
 
 startBtn.addEventListener('click', ()=>{
-  if(!filePool.length){ status.textContent = 'Please select images first.'; return; }
-  const visibleCount = 10; // changed to 10 per your requested setting
+  if(!filePool.length){
+    status.textContent = 'Please select images first.';
+    return;
+  }
+  const visibleCount = 8;
   status.textContent = `Starting slideshow with ${filePool.length} images...`;
+
   pickInitialPanels(visibleCount);
+
   if(replaceTimer) clearInterval(replaceTimer);
+
   const interval = Math.max(2000, parseInt(intervalSecInput.value || '5', 10)*1000);
   replaceTimer = setInterval(replaceOnePanel, interval);
-  // hide UI
-  const ui = document.getElementById('ui') || document.getElementById('controls') || document.getElementById('panelControls');
-  if(ui) ui.style.display = 'none';
+
+  document.getElementById('ui').style.display = 'none';
 });
 
-// cleanup when page unloads (revoke object URLs)
 window.addEventListener('beforeunload', ()=>{
-  filePool.forEach(i => { try{ URL.revokeObjectURL(i.url); } catch(e){} });
+  filePool.forEach(i=>{ try{ URL.revokeObjectURL(i.url);}catch(e){}});
   if(replaceTimer) clearInterval(replaceTimer);
 });
