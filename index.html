@@ -1,373 +1,84 @@
-<!DOCTYPE html>
+<!doctype html>
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>VR Slideshow — Curved Panels, Depth, Random Ken Burns</title>
+    <title>VR Slideshow — Gallery Mode</title>
 
-    <!-- A-Frame + look-at -->
+    <!-- A-Frame 1.5.0 (CDN) -->
     <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
     <script src="https://unpkg.com/aframe-look-at-component@1.0.0/dist/aframe-look-at-component.min.js"></script>
 
+    <!-- page CSS (keeps your repo's css/style.css) -->
+    <link rel="stylesheet" href="css/style.css" />
+
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
-      body { background:#080808; color:#eee; font-family:Arial,Helvetica,sans-serif; padding:18px; }
-      h2 { margin:0 0 8px 0; }
-      #controls { max-width:760px; }
-      #imageList { margin-top:12px; }
-      .thumbWrapper { display:inline-block; position:relative; margin:6px; }
+      /* Minimal inline layout helpers so the page looks usable if your css is missing */
+      body { margin:0; font-family:Arial,Helvetica,sans-serif; background:#080808; color:#eee; padding:16px; }
+      #controls { max-width:840px; margin:0 auto; }
       .thumbWrapper img { width:84px; height:84px; object-fit:cover; border-radius:6px; border:2px solid #444; }
+      .thumbWrapper { display:inline-block; position:relative; margin:6px; }
       .removeBtn { position:absolute; top:-6px; right:-6px; background:#c33; color:#fff; border:none; width:22px; height:22px; border-radius:50%; cursor:pointer; }
-      button, select, input { font-size:14px; padding:6px; }
       #status { margin-top:10px; color:#bbb; font-size:13px; }
       #debug { color:#ffd47a; font-size:13px; margin-top:10px; }
-      a { color:#66aaff; }
+      button, select, input { font-size:14px; padding:6px; }
     </style>
   </head>
 
   <body>
     <div id="controls">
-      <h2>VR Slideshow — Curved Panels & Depth</h2>
+      <h2>VR Slideshow — Gallery Mode</h2>
 
       <input id="filePicker" type="file" accept="image/*" />
-      <span style="margin-left:12px;">Tip: repeat <strong>Choose Files</strong> to add more images (Quest picks one at a time).</span>
+      <span style="margin-left:12px;">(Tap Choose Files repeatedly to add more images on Quest.)</span>
 
       <p style="margin-top:8px;">
         Panel size:
         <select id="panelSize">
-          <option value="medium" selected>Medium (recommended)</option>
-          <option value="large">Large</option>
           <option value="small">Small</option>
+          <option value="medium" selected>Medium</option>
+          <option value="large">Large</option>
         </select>
         &nbsp;&nbsp;
         Replace interval (sec):
         <input id="replaceInterval" type="number" min="1" max="30" value="5" style="width:70px;" />
       </p>
 
-      <p>Visible panels: <strong>10</strong> (fixed)</p>
+      <p>Visible panels: <strong>8</strong> (fixed)</p>
 
       <button id="startBtn" disabled>Start Slideshow</button>
       <div id="status">No images selected yet.</div>
-
       <div id="imageList" aria-live="polite"></div>
-
       <div id="debug" aria-live="polite"></div>
 
       <p style="margin-top:12px;font-size:13px;color:#aaa;">
-        When ready: press <strong>Start Slideshow</strong>. The page will prepare textures then prompt to enter VR.<br>
-        Diagram link (repo asset): <a href="assets/diagram.png" target="_blank">assets/diagram.png</a><br>
-        Local diagram path (for reference): <code>/mnt/data/A_2D_digital_illustration_demonstrates_a_virtual_r.png</code>
+        When ready: press <strong>Start Slideshow</strong>. The page will prepare textures then prompt to enter VR.
       </p>
     </div>
 
-    <!-- VR scene - uses a-assets for WebXR-safe textures -->
+    <!-- A-Frame scene (hidden until Start) -->
     <a-scene id="vrScene" embedded vr-mode-ui="enabled:true" style="display:none; height:100vh;">
+      <!-- assets container (we inject <img id="imgN"> entries here for WebXR compatibility) -->
       <a-assets id="aAssets"></a-assets>
 
       <a-entity id="cameraRig">
         <a-entity id="camera" camera look-controls position="0 1.6 0"></a-entity>
       </a-entity>
 
-      <a-sphere radius="36" segments-height="48" segments-width="64" scale="-1 1 1" color="#000"></a-sphere>
+      <!-- interior sphere (dark) -->
+      <a-sphere radius="40" segments-height="48" segments-width="64" scale="-1 1 1" color="#000"></a-sphere>
 
+      <!-- container where panels are appended -->
       <a-entity id="panelContainer"></a-entity>
 
-      <!-- VR debug overlay -->
+      <!-- in-VR debug overlay -->
       <a-entity id="vrDebug" visible="false" position="-1.6 2 -2">
         <a-plane width="3.2" height="1.4" color="#000" opacity="0.8"></a-plane>
         <a-text id="vrDebugText" value="" position="-1.48 0.52 0.01" align="left" wrap-count="30" color="#ffd47a"></a-text>
       </a-entity>
     </a-scene>
 
-    <script>
-      // CONFIG
-      const VISIBLE_PANELS = 10;
-      const PANEL_SIZE_MAP = { small: 4.0, medium: 8.0, large: 12.0 };
-
-      // curvature settings (gentle IMAX)
-      const CURVATURE_THETA_DEG = 18; // how wide each cylinder segment is (degrees)
-      const CYLINDER_THICKNESS = 0.02; // very thin segment
-
-      // vertical restriction: center 75% of sphere => phi range reduced
-      // We'll generate phi by computing y in range [-0.75*radius, +0.75*radius] then convert to spherical coords.
-
-      // DOM
-      const filePicker = document.getElementById('filePicker');
-      const startBtn = document.getElementById('startBtn');
-      const imageListDiv = document.getElementById('imageList');
-      const statusEl = document.getElementById('status');
-      const debugEl = document.getElementById('debug');
-      const aAssets = document.getElementById('aAssets');
-
-      // State
-      let fileList = [];
-      let metaList = []; // { id, url, width, height }
-      let panelEntities = [];
-      let replaceTimer = null;
-      let nextAssetId = 0;
-
-      // Logging helpers (also push into VR debug panel)
-      function log(msg) {
-        console.log(msg);
-        debugEl.textContent = String(msg).slice(0,800);
-        try {
-          const vrDebug = document.getElementById('vrDebug');
-          const vrDebugText = document.getElementById('vrDebugText');
-          if (vrDebug && vrDebugText) {
-            vrDebugText.setAttribute('value', String(msg).slice(0,700));
-            vrDebug.setAttribute('visible', true);
-          }
-        } catch(e){}
-      }
-      function clearLog() {
-        debugEl.textContent = '';
-        try { document.getElementById('vrDebug').setAttribute('visible', false); } catch(e) {}
-      }
-
-      // Convert File -> Base64 data URL
-      function fileToDataURL(file) {
-        return new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onerror = () => reject(new Error('FileReader error'));
-          reader.onload = () => resolve(reader.result);
-          reader.readAsDataURL(file);
-        });
-      }
-
-      // Get image natural dimensions
-      function getImageDimensions(dataUrl) {
-        return new Promise((resolve, reject) => {
-          const img = new Image();
-          img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
-          img.onerror = () => reject(new Error('Image decode error'));
-          img.src = dataUrl;
-        });
-      }
-
-      // UI thumbnails
-      function addThumb(dataUrl, idx) {
-        const w = document.createElement('div');
-        w.className = 'thumbWrapper';
-        w.dataset.idx = idx;
-        const img = document.createElement('img');
-        img.src = dataUrl;
-        w.appendChild(img);
-        const rm = document.createElement('button');
-        rm.className = 'removeBtn';
-        rm.innerText = '×';
-        rm.title = 'Remove';
-        rm.onclick = () => removeImage(idx);
-        w.appendChild(rm);
-        imageListDiv.appendChild(w);
-      }
-      function rebuildThumbs(){ imageListDiv.innerHTML=''; metaList.forEach((m,i)=>addThumb(m.url,i)); }
-      function removeImage(index) {
-        const meta = metaList[index];
-        if (meta && meta.id) {
-          const el = document.getElementById(meta.id);
-          if (el && el.parentNode) el.parentNode.removeChild(el);
-        }
-        metaList.splice(index,1);
-        fileList.splice(index,1);
-        rebuildThumbs();
-        statusEl.textContent = `${metaList.length} images selected.`;
-        startBtn.disabled = metaList.length < 1;
-      }
-
-      // Handler: single-file piсker (Quest picks 1 at a time)
-      filePicker.addEventListener('change', async (evt) => {
-        const files = Array.from(filePicker.files || []);
-        if (!files.length) return;
-        const f = files[0];
-        statusEl.textContent = `Converting ${f.name}...`;
-        try {
-          const dataUrl = await fileToDataURL(f);
-          const dims = await getImageDimensions(dataUrl);
-          const id = `img${nextAssetId++}`;
-          const imgEl = document.createElement('img');
-          imgEl.setAttribute('id', id);
-          imgEl.setAttribute('src', dataUrl);
-          imgEl.setAttribute('crossorigin', 'anonymous');
-          aAssets.appendChild(imgEl);
-
-          metaList.push({ id, url: dataUrl, width: dims.width, height: dims.height });
-          fileList.push(f);
-          addThumb(dataUrl, metaList.length-1);
-          statusEl.textContent = `${metaList.length} images selected.`;
-          startBtn.disabled = metaList.length < 1;
-          clearLog();
-        } catch (err) {
-          log('Image conversion error: ' + (err && err.message ? err.message : err));
-        } finally {
-          filePicker.value = '';
-        }
-      });
-
-      // Utility: convert desired center-75% vertical into phi angle range
-      function randomSphericalPositionCentered(radius) {
-        // centerY range fraction: [-0.75, +0.75] of sphere vertical extent
-        const yFrac = randRange(-0.75, 0.75);
-        // convert to phi: y = radius * cos(phi) => cos(phi) = y/radius
-        const cosPhi = yFrac; // since yFrac already scaled -0.75..0.75
-        // clamp
-        const cp = Math.max(-0.99, Math.min(0.99, cosPhi));
-        const phi = Math.acos(cp);
-        const theta = Math.random() * Math.PI * 2;
-        const x = radius * Math.sin(phi) * Math.cos(theta);
-        const y = radius * Math.cos(phi);
-        const z = radius * Math.sin(phi) * Math.sin(theta);
-        return { x,y,z, theta, phi };
-      }
-
-      function randRange(a,b){ return a + Math.random()*(b-a); }
-
-      // Create a curved panel using a thin cylinder segment (gentle curvature)
-      function createCurvedPanel(meta, panelWidth) {
-        // radius grouping for depth layers (near/mid/far)
-        const layerChoice = Math.random();
-        let baseRadius;
-        if (layerChoice < 0.25) baseRadius = randRange(10, 14);      // close
-        else if (layerChoice < 0.7) baseRadius = randRange(15, 18);  // mid
-        else baseRadius = randRange(20, 26);                        // far
-
-        // center-restricted spherical position
-        const pos = randomSphericalPositionCentered(baseRadius);
-        const depthOffset = randRange(-1.0, 1.0);
-        const px = pos.x * (1 + depthOffset/28);
-        const py = pos.y * (1 + depthOffset/28);
-        const pz = pos.z * (1 + depthOffset/28);
-
-        // compute aspect and cylinder height
-        const aspect = meta.width && meta.height ? meta.width/meta.height : 1.6;
-        // For curved segment we treat height similar to panelWidth/aspect
-        const height = Math.max(1.2, panelWidth / aspect);
-
-        // create cylinder segment
-        const cyl = document.createElement('a-entity');
-        // we use geometry component with cylinder and small thetaLength for curvature
-        cyl.setAttribute('geometry', `primitive: cylinder; radius: ${baseRadius}; height: ${height}; openEnded: true; thetaLength: ${CURVATURE_THETA_DEG}`);
-        // rotate cylinder so its curved face faces inward - we want the curved surface to be visible from center
-        // default cylinder axis is Y; rotate so curved surface faces camera by adjusting rotation
-        const thetaDeg = (pos.theta || (Math.random()*360)) * 180/Math.PI;
-        cyl.setAttribute('rotation', `0 ${-thetaDeg} 0`);
-        // position the cylinder so its curved face is roughly at px,py,pz
-        cyl.setAttribute('position', `${px} ${py} ${pz}`);
-        // material uses a-assets reference to the image id; set shader flat and double-sided
-        cyl.setAttribute('material', `src: #${meta.id}; shader: flat; side: double;`);
-        // scale thin along radial axis to make it look like a panel (cylinder thickness)
-        cyl.object3D.scale.set(1,1,1); // keep default, geometry height controls vertical and curvature controls width
-
-        // attach Ken Burns style animations (randomized)
-        const dur = Math.floor(randRange(18000, 30000));
-        // subtle zoom by scaling X and Y slightly
-        const zoomTo = 0.97 + Math.random()*0.18; // ~0.97 - 1.15
-        cyl.setAttribute('animation__scale', `property: scale; to: ${zoomTo} ${zoomTo} ${zoomTo}; dur: ${dur}; dir: alternate; loop: true; easing: easeInOutSine`);
-        // subtle pan: shift the cylinder a small amount in world coords (gives pan impression)
-        const panX = randRange(-0.8, 0.8);
-        const panY = randRange(-0.5, 0.5);
-        const panZ = randRange(-0.6, 0.6);
-        cyl.setAttribute('animation__pos', `property: position; from: ${px} ${py} ${pz}; to: ${px + panX} ${py + panY} ${pz + panZ}; dur: ${dur}; dir: alternate; loop: true; easing: easeInOutSine`);
-
-        // ensure the cylinder faces inward: use look-at to orient toward camera roughly
-        cyl.setAttribute('look-at', '#camera');
-
-        return cyl;
-      }
-
-      async function buildPanels(panelWidth) {
-        const container = document.getElementById('panelContainer');
-        // clear old
-        panelEntities.forEach(e=>{ try{ e.parentNode.removeChild(e); }catch(e){}});
-        panelEntities = [];
-        // create initial set, prefer variety: take first N then fill randomly
-        for (let i=0; i < Math.min(VISIBLE_PANELS, metaList.length); i++) {
-          const meta = metaList[i % metaList.length];
-          const ent = createCurvedPanel(meta, panelWidth);
-          container.appendChild(ent);
-          panelEntities.push(ent);
-        }
-        while (panelEntities.length < VISIBLE_PANELS) {
-          const meta = metaList[Math.floor(Math.random()*metaList.length)];
-          const ent = createCurvedPanel(meta, panelWidth);
-          container.appendChild(ent);
-          panelEntities.push(ent);
-        }
-      }
-
-      function replacePanel(panelWidth) {
-        if (!panelEntities.length || !metaList.length) return;
-        const idx = Math.floor(Math.random()*panelEntities.length);
-        const old = panelEntities[idx];
-        try { old.parentNode.removeChild(old); } catch(e){}
-        const meta = metaList[Math.floor(Math.random()*metaList.length)];
-        const ent = createCurvedPanel(meta, panelWidth);
-        document.getElementById('panelContainer').appendChild(ent);
-        panelEntities[idx] = ent;
-      }
-
-      // Start button flow: wait for assets loaded, build panels, then enter VR
-      startBtn.addEventListener('click', async () => {
-        startBtn.disabled = true;
-        statusEl.textContent = 'Preparing curved panels — building textures...';
-        clearLog();
-
-        if (!metaList.length) { statusEl.textContent = 'Select at least 1 image first.'; startBtn.disabled = false; return; }
-
-        const sizeSetting = document.getElementById('panelSize').value;
-        const panelWidth = PANEL_SIZE_MAP[sizeSetting] || PANEL_SIZE_MAP.medium;
-
-        try {
-          // wait for assets (images) to report complete
-          const assetImgs = Array.from(aAssets.querySelectorAll('img'));
-          await Promise.all(assetImgs.map(img => new Promise((resolve) => {
-            if (img.complete && img.naturalWidth>0) return resolve();
-            img.onload = () => resolve();
-            img.onerror = () => { log('Asset load failed for ' + (img.id||'unknown')); resolve(); };
-          })));
-          await buildPanels(panelWidth);
-        } catch (err) {
-          log('Error while building panels: ' + (err && err.message?err.message:err));
-          startBtn.disabled = false;
-          return;
-        }
-
-        // Show scene and enter VR (must be a user gesture)
-        document.getElementById('controls').style.display = 'none';
-        const scene = document.getElementById('vrScene');
-        scene.style.display = 'block';
-        setTimeout(async () => {
-          try {
-            await scene.enterVR();
-          } catch (err) {
-            log('Failed to enter VR: ' + (err && err.message?err.message:err));
-            document.getElementById('controls').style.display = '';
-            scene.style.display = 'none';
-            startBtn.disabled = false;
-            return;
-          }
-
-          // start replacement timer only after VR entered
-          const interval = Math.max(1, parseFloat(document.getElementById('replaceInterval').value) || 5);
-          if (replaceTimer) clearInterval(replaceTimer);
-          replaceTimer = setInterval(() => {
-            try {
-              replacePanel(panelWidth);
-            } catch(e) {
-              log('Replace error: ' + e);
-            }
-          }, interval * 1000);
-
-          statusEl.textContent = 'Slideshow running.';
-          clearLog();
-        }, 120);
-      });
-
-      // utility random helpers
-      function randRange(a,b) { return a + Math.random()*(b-a); }
-
-      // Beforeunload cleanup
-      window.addEventListener('beforeunload', () => {
-        if (replaceTimer) clearInterval(replaceTimer);
-      });
-
-    </script>
+    <!-- main app script -->
+    <script src="js/app.js?v=1"></script>
   </body>
 </html>
