@@ -1,14 +1,14 @@
 /**
- * VR Slideshow — R1.2
+ * VR Slideshow — R1.3
  * Date: 2025-11-25
  * Description:
- *   R1.2 increases fixed radius (18m), enforces full 360° placement excluding top/bottom 15%,
- *   removes positional/pan animations that caused perceived floating, and applies
- *   Ken Burns only as a scale (zoom) animation so panels do not drift. Keeps UI unchanged.
+ *   This revision uses flat planes, enforces fixed radius ~3.2m, full 360° yaw with elevation clamp +/-75°,
+ *   ensures minimum angular separation between panels, eliminates position/pan animations,
+ *   and applies Ken Burns as scale-only on each plane. No UI changes.
  */
 
 (function(){
-  // DOM refs (same as previous versions)
+  // DOM refs
   const filePicker = document.getElementById('filePicker');
   const startBtn = document.getElementById('startBtn');
   const imageListDiv = document.getElementById('imageList');
@@ -18,30 +18,28 @@
   const panelContainer = document.getElementById('panelContainer');
   const scene = document.getElementById('vrScene');
 
-  // Config for R1.2
+  // Configuration
   const VISIBLE_PANELS = 8;
   const DEFAULT_PANEL_HEIGHTS = { small: 0.45, medium: 0.65, large: 1.0 };
-  const CURVATURE_THETA_DEG = 14;
-  const FIXED_RADIUS = 18.0;        // moved further away
-  const EXCLUDE_POLAR_DEG = 15;     // exclude top/bottom 15% -> elevation allowed +/-75°
-  const MIN_ELEVATION_DEG = -(90 - EXCLUDE_POLAR_DEG); // -75
-  const MAX_ELEVATION_DEG =  (90 - EXCLUDE_POLAR_DEG); // +75
+  const FIXED_RADIUS = 3.2;            // comfortable arms-length
+  const EXCLUDE_POLAR_DEG = 15;        // exclude top/bottom 15%
+  const MIN_ELEVATION_DEG = -(90 - EXCLUDE_POLAR_DEG);
+  const MAX_ELEVATION_DEG =  (90 - EXCLUDE_POLAR_DEG);
+  const MIN_ANGULAR_SEPARATION_DEG = 28; // degrees between panel yaws to reduce overlap
+  const MAX_PANEL_WIDTH = 2.4;         // clamp width to reduce intersections
 
-  // Ken Burns (scale-only, medium perceptible)
   const KB_ZOOM_MIN = 1.05;
   const KB_ZOOM_MAX = 1.12;
   const KB_DURATION_MIN = 15000;
   const KB_DURATION_MAX = 20000;
 
-  // Width clamp (reduce max width to avoid overlap)
-  const MAX_PANEL_WIDTH = 3.0;
-
   // State
-  let metaList = [];  // { id, dataUrl, width, height }
+  let metaList = []; // { id, dataUrl, width, height }
   let nextAssetId = 0;
   let panelEntities = [];
   let unusedPool = [];
   let replaceTimer = null;
+  let usedYaws = []; // keep track of chosen yaw angles to enforce separation
 
   // Helpers
   function log(msg){
@@ -62,17 +60,15 @@
   }
   function randRange(a,b){ return a + Math.random() * (b - a); }
 
-  // Convert File -> Base64 data URL
+  // File -> DataURL
   function fileToDataURL(file){
     return new Promise((resolve,reject)=>{
       const reader = new FileReader();
-      reader.onerror = () => reject(new Error('FileReader error'));
-      reader.onload = () => resolve(reader.result);
+      reader.onerror = ()=> reject(new Error('FileReader error'));
+      reader.onload = ()=> resolve(reader.result);
       reader.readAsDataURL(file);
     });
   }
-
-  // Get image dimensions safely
   function getImageDimensionsFromDataUrl(dataUrl){
     return new Promise((resolve,reject)=>{
       const img = new Image();
@@ -82,7 +78,7 @@
     });
   }
 
-  // UI thumbnail helpers
+  // UI thumbnails
   function addThumb(dataUrl, idx){
     const wrapper = document.createElement('div');
     wrapper.className = 'thumbWrapper';
@@ -113,7 +109,7 @@
     startBtn.disabled = metaList.length < 1;
   }
 
-  // file picker handler (Quest picks one at a time typically)
+  // File picker (Quest picks one at a time)
   filePicker.addEventListener('change', async (evt)=>{
     const files = Array.from(filePicker.files || []);
     if(!files.length) return;
@@ -123,7 +119,6 @@
       const dataUrl = await fileToDataURL(f);
       const dims = await getImageDimensionsFromDataUrl(dataUrl);
       const id = `img${nextAssetId++}`;
-      // inject into a-assets so A-Frame can use it in WebXR
       const imgEl = document.createElement('img');
       imgEl.setAttribute('id', id);
       imgEl.setAttribute('src', dataUrl);
@@ -142,89 +137,104 @@
     }
   });
 
-  // Position on sphere: full yaw [0,360), elevation limited to +/-75°
-  function randomPositionOnSphereFixedRadius(radius){
-    const yaw = randRange(0, 360) * Math.PI/180; // full circle
+  // Choose a yaw that is at least MIN_ANGULAR_SEPARATION_DEG away from usedYaws
+  function chooseSeparatedYaw(){
+    const maxAttempts = 30;
+    for(let attempt=0; attempt<maxAttempts; attempt++){
+      const yawDeg = randRange(0,360);
+      let ok = true;
+      for(const used of usedYaws){
+        const diff = Math.abs(((yawDeg - used + 180 + 360) % 360) - 180); // shortest difference
+        if(diff < MIN_ANGULAR_SEPARATION_DEG){ ok = false; break; }
+      }
+      if(ok){ usedYaws.push(yawDeg); return yawDeg * Math.PI/180; }
+    }
+    // fallback: just return random yaw after attempts
+    const fallback = randRange(0,360);
+    usedYaws.push(fallback);
+    return fallback * Math.PI/180;
+  }
+
+  // spherical to cartesian with elevation clamp
+  function positionFromAngles(radius){
+    const yaw = chooseSeparatedYaw(); // radians
     const elevationDeg = randRange(MIN_ELEVATION_DEG, MAX_ELEVATION_DEG);
     const pitch = elevationDeg * Math.PI/180;
     const x = radius * Math.cos(pitch) * Math.sin(yaw);
     const y = radius * Math.sin(pitch);
     const z = -radius * Math.cos(pitch) * Math.cos(yaw);
     const theta = Math.atan2(x, -z);
-    return { x, y, z, theta };
+    return { x, y, z, theta, yawDeg: yaw * 180/Math.PI, elevationDeg };
   }
 
-  // create a gentle curved panel (no position animation)
-  function createCurvedPanel(meta, panelHeight){
-    const pos = randomPositionOnSphereFixedRadius(FIXED_RADIUS);
+  // create a flat a-plane (no position animation)
+  function createPlanePanel(meta, panelHeight){
+    const pos = positionFromAngles(FIXED_RADIUS);
 
     const aspect = meta.width && meta.height ? meta.width / meta.height : 1.5;
     const height = Math.max(0.5, panelHeight);
     let width = Math.max(0.6, height * aspect);
     if(width > MAX_PANEL_WIDTH) width = MAX_PANEL_WIDTH;
 
-    const thetaDeg = CURVATURE_THETA_DEG;
-    const radius = FIXED_RADIUS;
-    const arcLength = (Math.PI * 2 * radius) * (thetaDeg / 360);
-    const scaleX = Math.max(0.5, Math.min(1.2, width / arcLength));
+    const plane = document.createElement('a-plane');
+    plane.setAttribute('width', width);
+    plane.setAttribute('height', height);
+    plane.setAttribute('position', `${pos.x} ${pos.y} ${pos.z}`);
+    plane.setAttribute('rotation', `0 ${-pos.theta * 180/Math.PI} 0`);
+    plane.setAttribute('material', `src: #${meta.id}; shader: flat; side:double;`);
+    plane.setAttribute('look-at', '#camera');
 
-    const ent = document.createElement('a-entity');
-    ent.setAttribute('geometry', `primitive: cylinder; radius: ${radius}; height: ${height}; openEnded: true; thetaLength: ${thetaDeg}`);
-    ent.setAttribute('position', `${pos.x} ${pos.y} ${pos.z}`);
-    ent.setAttribute('rotation', `0 ${-pos.theta * 180/Math.PI} 0`);
-    ent.setAttribute('material', `src: #${meta.id}; shader: flat; side: double;`);
-    ent.object3D.scale.set(scaleX, 1, 1);
-
-    // Ken Burns scale-only (no position/pan)
+    // Ken Burns: scale-only (local scale animation)
     const zoomTo = randRange(KB_ZOOM_MIN, KB_ZOOM_MAX);
     const dur = Math.floor(randRange(KB_DURATION_MIN, KB_DURATION_MAX));
-    ent.setAttribute('animation__kb_scale', `property: scale; to: ${scaleX * zoomTo} ${zoomTo} ${zoomTo}; dur: ${dur}; dir: alternate; loop: true; easing: easeInOutSine`);
+    plane.setAttribute('animation__kb_scale', `property: scale; to: ${zoomTo} ${zoomTo} 1; dur: ${dur}; dir: alternate; loop: true; easing: easeInOutSine`);
 
-    // make entity face camera
-    ent.setAttribute('look-at', '#camera');
-
-    return ent;
+    return plane;
   }
 
-  // build initial panel set
+  // Build initial visible panels
   async function buildPanels(panelHeight){
-    // clear previous panels
+    // clear old
     panelEntities.forEach(e=>{ try{ e.parentNode.removeChild(e); }catch(e){} });
     panelEntities = [];
+    usedYaws = [];
 
-    // prepare pool
+    // prepare pool and shuffle
     unusedPool = metaList.slice();
     shuffleArray(unusedPool);
 
+    // fill visible panels
     for(let i=0;i<Math.min(VISIBLE_PANELS, unusedPool.length); i++){
       const m = unusedPool.shift();
-      const ent = createCurvedPanel(m, panelHeight);
+      const ent = createPlanePanel(m, panelHeight);
       panelContainer.appendChild(ent);
       panelEntities.push(ent);
     }
-
+    // if not enough images, duplicate randomly to reach count
     while(panelEntities.length < VISIBLE_PANELS && metaList.length){
       const m = metaList[Math.floor(Math.random()*metaList.length)];
-      const ent = createCurvedPanel(m, panelHeight);
+      const ent = createPlanePanel(m, panelHeight);
       panelContainer.appendChild(ent);
       panelEntities.push(ent);
     }
   }
 
-  // replace one panel at interval
+  // Replace one panel (fade only -> no positional changes)
   function replaceOnePanel(panelHeight){
     if(!panelEntities.length || !metaList.length) return;
     if(unusedPool.length === 0){
       unusedPool = metaList.slice();
       shuffleArray(unusedPool);
     }
+    // pick random index
     const idx = Math.floor(Math.random()*panelEntities.length);
     const old = panelEntities[idx];
     try { old.setAttribute('animation__fadeout', `property: material.opacity; to: 0; dur: 600;`); } catch(e){}
     setTimeout(()=>{
       try{ old.parentNode.removeChild(old); } catch(e){}
       const next = unusedPool.shift();
-      const newEnt = createCurvedPanel(next, panelHeight);
+      const newEnt = createPlanePanel(next, panelHeight);
+      // start invisible then fade in
       try { newEnt.setAttribute('material','opacity:0; shader:flat; side:double;'); } catch(e){}
       panelContainer.appendChild(newEnt);
       setTimeout(()=> {
@@ -234,7 +244,6 @@
     }, 620);
   }
 
-  // shuffle helper
   function shuffleArray(arr){
     for(let i=arr.length-1;i>0;i--){
       const j = Math.floor(Math.random()*(i+1));
@@ -242,7 +251,6 @@
     }
   }
 
-  // wait for a-assets to be ready
   function waitForAssetsLoaded(){
     const imgs = Array.from(aAssets.querySelectorAll('img'));
     return Promise.all(imgs.map(img => new Promise((resolve)=>{
@@ -252,7 +260,7 @@
     })));
   }
 
-  // Start button flow
+  // Start button
   startBtn.addEventListener('click', async ()=>{
     startBtn.disabled = true;
     statusEl.textContent = 'Preparing slideshow — building textures...';
@@ -272,11 +280,9 @@
       return;
     }
 
-    // hide controls and show scene
     document.getElementById('controls').style.display = 'none';
     scene.style.display = 'block';
 
-    // enter VR
     setTimeout(async ()=>{
       try {
         await scene.enterVR();
@@ -288,7 +294,6 @@
         return;
       }
 
-      // start replacement loop only after VR enter
       const interval = Math.max(1, parseFloat(document.getElementById('replaceInterval').value) || 5);
       if(replaceTimer) clearInterval(replaceTimer);
       replaceTimer = setInterval(()=> {
@@ -305,7 +310,7 @@
     if(replaceTimer) clearInterval(replaceTimer);
   });
 
-  // debug exposure
+  // quick debug
   window._vrslideshow = { metaList };
 
 })();
