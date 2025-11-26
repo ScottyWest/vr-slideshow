@@ -1,70 +1,92 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>VR Slideshow</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!--
+  VR Slideshow — R1.0 (Baseline-OculusVerified)
+  Date: 2025-11-25
+  Description:
+    This is the mutually verified, last-known-good version
+    confirmed functional on Oculus Quest before new revisions.
+-->
 
-  <!-- A-Frame 1.5.0 -->
-  <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>VR Slideshow — Gallery Mode</title>
 
-  <!-- App Logic -->
-  <script src="app.js"></script>
+    <!-- A-Frame 1.5.0 (CDN) -->
+    <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+    <script src="https://unpkg.com/aframe-look-at-component@1.0.0/dist/aframe-look-at-component.min.js"></script>
 
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      background: #111;
-      color: #eee;
-      margin: 0;
-      padding: 0;
-      overflow: hidden;
-    }
-    #controls {
-      padding: 20px;
-    }
-    input[type=file] {
-      margin-top: 10px;
-    }
-    select, button {
-      margin-top: 15px;
-      padding: 8px 12px;
-    }
-  </style>
-</head>
-<body>
+    <!-- page CSS (keeps your repo's css/style.css) -->
+    <link rel="stylesheet" href="css/style.css" />
 
-<div id="controls">
-  <h2>VR Slideshow</h2>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      /* Minimal inline layout helpers so the page looks usable if your css is missing */
+      body { margin:0; font-family:Arial,Helvetica,sans-serif; background:#080808; color:#eee; padding:16px; }
+      #controls { max-width:840px; margin:0 auto; }
+      .thumbWrapper img { width:84px; height:84px; object-fit:cover; border-radius:6px; border:2px solid #444; }
+      .thumbWrapper { display:inline-block; position:relative; margin:6px; }
+      .removeBtn { position:absolute; top:-6px; right:-6px; background:#c33; color:#fff; border:none; width:22px; height:22px; border-radius:50%; cursor:pointer; }
+      #status { margin-top:10px; color:#bbb; font-size:13px; }
+      #debug { color:#ffd47a; font-size:13px; margin-top:10px; }
+      button, select, input { font-size:14px; padding:6px; }
+    </style>
+  </head>
 
-  <p>Select up to 20 images:</p>
-  <input type="file" id="fileInput" accept="image/*" multiple>
+  <body>
+    <div id="controls">
+      <h2>VR Slideshow — Gallery Mode</h2>
 
-  <p>Panel size:</p>
-  <select id="panelSize">
-    <option value="small">Small</option>
-    <option value="medium" selected>Medium</option>
-    <option value="large">Large</option>
-  </select>
+      <input id="filePicker" type="file" accept="image/*" />
+      <span style="margin-left:12px;">(Tap Choose Files repeatedly to add more images on Quest.)</span>
 
-  <p>Image replacement interval (seconds):</p>
-  <select id="replaceInterval">
-    <option value="10">10</option>
-    <option value="20" selected>20</option>
-    <option value="30">30</option>
-  </select>
+      <p style="margin-top:8px;">
+        Panel size:
+        <select id="panelSize">
+          <option value="small">Small</option>
+          <option value="medium" selected>Medium</option>
+          <option value="large">Large</option>
+        </select>
+        &nbsp;&nbsp;
+        Replace interval (sec):
+        <input id="replaceInterval" type="number" min="1" max="30" value="5" style="width:70px;" />
+      </p>
 
-  <br><br>
-  <button id="startBtn">Start Slideshow</button>
+      <p>Visible panels: <strong>8</strong> (fixed)</p>
 
-  <p id="status" style="color:#8cf;margin-top:10px;"></p>
-</div>
+      <button id="startBtn" disabled>Start Slideshow</button>
+      <div id="status">No images selected yet.</div>
+      <div id="imageList" aria-live="polite"></div>
+      <div id="debug" aria-live="polite"></div>
 
+      <p style="margin-top:12px;font-size:13px;color:#aaa;">
+        When ready: press <strong>Start Slideshow</strong>. The page will prepare textures then prompt to enter VR.
+      </p>
+    </div>
 
-<!-- VR Scene -->
-<a-scene id="vrScene" background="color: #000" embedded style="display:none">
-  <a-assets id="imageAssets"></a-assets>
-</a-scene>
+    <!-- A-Frame scene (hidden until Start) -->
+    <a-scene id="vrScene" embedded vr-mode-ui="enabled:true" style="display:none; height:100vh;">
+      <!-- assets container (we inject <img id="imgN"> entries here for WebXR compatibility) -->
+      <a-assets id="aAssets"></a-assets>
 
-</body>
+      <a-entity id="cameraRig">
+        <a-entity id="camera" camera look-controls position="0 1.6 0"></a-entity>
+      </a-entity>
+
+      <!-- interior sphere (dark) -->
+      <a-sphere radius="40" segments-height="48" segments-width="64" scale="-1 1 1" color="#000"></a-sphere>
+
+      <!-- container where panels are appended -->
+      <a-entity id="panelContainer"></a-entity>
+
+      <!-- in-VR debug overlay -->
+      <a-entity id="vrDebug" visible="false" position="-1.6 2 -2">
+        <a-plane width="3.2" height="1.4" color="#000" opacity="0.8"></a-plane>
+        <a-text id="vrDebugText" value="" position="-1.48 0.52 0.01" align="left" wrap-count="30" color="#ffd47a"></a-text>
+      </a-entity>
+    </a-scene>
+
+    <!-- main app script -->
+    <script src="js/app.js?v=1"></script>
+  </body>
 </html>
