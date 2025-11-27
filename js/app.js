@@ -1,10 +1,13 @@
 /**
- * VR Slideshow — R1.3
- * Date: 2025-11-25
+ * VR Slideshow — R1.4
+ * Date: 2025-11-27
  * Description:
- *   This revision uses flat planes, enforces fixed radius ~3.2m, full 360° yaw with elevation clamp +/-75°,
- *   ensures minimum angular separation between panels, eliminates position/pan animations,
- *   and applies Ken Burns as scale-only on each plane. No UI changes.
+ *   - Curved static panels (horizontal curvature only)
+ *   - Fixed radius: 1.5 m (arm's length)
+ *   - Middle 50% vertical band centered on camera height (ensures panels won't appear below feet)
+ *   - Ken Burns applied only to texture UV (offset & repeat), never to panel transform
+ *   - High-quality textures: crossOrigin, anisotropy, sRGBEncoding
+ *   - 8 fixed panels, replaced over time by fading textures
  */
 
 (function(){
@@ -17,21 +20,22 @@
   const aAssets = document.getElementById('aAssets');
   const panelContainer = document.getElementById('panelContainer');
   const scene = document.getElementById('vrScene');
+  const cameraEl = document.getElementById('camera');
 
   // Configuration
   const VISIBLE_PANELS = 8;
   const DEFAULT_PANEL_HEIGHTS = { small: 0.45, medium: 0.65, large: 1.0 };
-  const FIXED_RADIUS = 3.2;            // comfortable arms-length
-  const EXCLUDE_POLAR_DEG = 15;        // exclude top/bottom 15%
-  const MIN_ELEVATION_DEG = -(90 - EXCLUDE_POLAR_DEG);
-  const MAX_ELEVATION_DEG =  (90 - EXCLUDE_POLAR_DEG);
-  const MIN_ANGULAR_SEPARATION_DEG = 28; // degrees between panel yaws to reduce overlap
-  const MAX_PANEL_WIDTH = 2.4;         // clamp width to reduce intersections
+  const FIXED_RADIUS = 1.5;            // comfortable arms-length (meters)
+  const BAND_FRACTION = 0.5;          // middle 50% of sphere vertically
+  const MIN_ANGULAR_SEPARATION_DEG = 28;
+  const MAX_PANEL_WIDTH = 2.4;
 
-  const KB_ZOOM_MIN = 1.05;
+  const KB_ZOOM_MIN = 1.03;
   const KB_ZOOM_MAX = 1.12;
+  const KB_PAN_VEL_MIN = 0.0008; // texture offset velocity
+  const KB_PAN_VEL_MAX = 0.0025;
   const KB_DURATION_MIN = 15000;
-  const KB_DURATION_MAX = 20000;
+  const KB_DURATION_MAX = 22000;
 
   // State
   let metaList = []; // { id, dataUrl, width, height }
@@ -39,7 +43,7 @@
   let panelEntities = [];
   let unusedPool = [];
   let replaceTimer = null;
-  let usedYaws = []; // keep track of chosen yaw angles to enforce separation
+  let usedYaws = [];
 
   // Helpers
   function log(msg){
@@ -109,7 +113,7 @@
     startBtn.disabled = metaList.length < 1;
   }
 
-  // File picker (Quest picks one at a time)
+  // File picker
   filePicker.addEventListener('change', async (evt)=>{
     const files = Array.from(filePicker.files || []);
     if(!files.length) return;
@@ -122,6 +126,7 @@
       const imgEl = document.createElement('img');
       imgEl.setAttribute('id', id);
       imgEl.setAttribute('src', dataUrl);
+      // ensure crossOrigin for texture loading later
       imgEl.setAttribute('crossorigin','anonymous');
       aAssets.appendChild(imgEl);
 
@@ -139,7 +144,7 @@
 
   // Choose a yaw that is at least MIN_ANGULAR_SEPARATION_DEG away from usedYaws
   function chooseSeparatedYaw(){
-    const maxAttempts = 30;
+    const maxAttempts = 60;
     for(let attempt=0; attempt<maxAttempts; attempt++){
       const yawDeg = randRange(0,360);
       let ok = true;
@@ -149,47 +154,186 @@
       }
       if(ok){ usedYaws.push(yawDeg); return yawDeg * Math.PI/180; }
     }
-    // fallback: just return random yaw after attempts
+    // fallback
     const fallback = randRange(0,360);
     usedYaws.push(fallback);
     return fallback * Math.PI/180;
   }
 
-  // spherical to cartesian with elevation clamp
+  // position calculation: y constrained to middle 50% around camera height
   function positionFromAngles(radius){
-    const yaw = chooseSeparatedYaw(); // radians
-    const elevationDeg = randRange(MIN_ELEVATION_DEG, MAX_ELEVATION_DEG);
-    const pitch = elevationDeg * Math.PI/180;
-    const x = radius * Math.cos(pitch) * Math.sin(yaw);
-    const y = radius * Math.sin(pitch);
-    const z = -radius * Math.cos(pitch) * Math.cos(yaw);
+    const yaw = chooseSeparatedYaw(); // radians (theta around Y)
+    // Vertical band centered around camera height so panels won't appear below feet
+    const bandHeight = radius * (BAND_FRACTION); // band is fraction of diameter; using radius*BAND_FRACTION centers around camera
+    // Use camera y as center
+    const camPos = cameraEl.getAttribute('position') || { x:0, y:1.6, z:0 };
+    const y = camPos.y + randRange(-bandHeight/2, bandHeight/2);
+
+    // compute pitch such that point lies on sphere shell at given radius
+    // we compute spherical coordinates from yaw and y -> x,z
+    const clampedY = Math.max(-radius + 0.01, Math.min(radius - 0.01, y - 0));
+    const horizDist = Math.sqrt(Math.max(0, radius*radius - clampedY*clampedY));
+    const x = horizDist * Math.sin(yaw);
+    const z = -horizDist * Math.cos(yaw);
     const theta = Math.atan2(x, -z);
-    return { x, y, z, theta, yawDeg: yaw * 180/Math.PI, elevationDeg };
+    return { x, y: clampedY, z, theta, yawDeg: yaw * 180/Math.PI };
   }
 
-  // create a flat a-plane (no position animation)
-  function createPlanePanel(meta, panelHeight){
-    const pos = positionFromAngles(FIXED_RADIUS);
+  // Create curved plane geometry and mesh as an A-Frame object
+  // We'll create a component 'curved-panel' which sets el.setObject3D('mesh', mesh)
+  AFRAME.registerComponent('curved-panel', {
+    schema: {
+      width: { type: 'number', default: 1.2 },
+      height: { type: 'number', default: 0.8 },
+      curvature: { type: 'number', default: 0.4 }, // curvature strength 0..1
+      segmentsW: { type: 'int', default: 24 },
+      segmentsH: { type: 'int', default: 12 },
+      src: { type: 'string', default: '' }
+    },
+    init: function(){
+      const data = this.data;
+      const el = this.el;
+      const width = data.width;
+      const height = data.height;
+      const segW = Math.max(4, data.segmentsW);
+      const segH = Math.max(1, data.segmentsH);
 
+      // Create plane geometry
+      const geom = new THREE.PlaneGeometry(width, height, segW, segH);
+
+      // Bend geometry horizontally by mapping X to an arc
+      // curvature parameter maps to a bend radius: larger curvature -> smaller radius
+      const bend = Math.max(0, Math.min(1, data.curvature));
+      const arc = bend * Math.PI / 4; // up to 45 degrees arc
+      const radius = (arc > 0) ? (width / arc) : 1000;
+
+      const pos = geom.attributes.position;
+      for(let i=0;i<pos.count;i++){
+        const vx = pos.getX(i); // -width/2 .. +width/2
+        const vy = pos.getY(i);
+        if(arc > 0){
+          const t = (vx + width/2) / width; // 0..1
+          const angle = (t - 0.5) * arc; // centered around 0
+          const newX = Math.sin(angle) * radius;
+          const newZ = radius - Math.cos(angle) * radius;
+          pos.setX(i, newX);
+          pos.setZ(i, newZ);
+          pos.setY(i, vy);
+        } else {
+          // flat plane
+          pos.setX(i, vx);
+          pos.setZ(i, 0);
+          pos.setY(i, vy);
+        }
+      }
+      geom.computeVertexNormals();
+
+      // Create a placeholder material (will set texture later)
+      const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+
+      const mesh = new THREE.Mesh(geom, mat);
+      // rotate so the plane faces outward along -Z by default; we'll rotate entity later
+      mesh.rotation.x = 0;
+
+      el.setObject3D('mesh', mesh);
+
+      // store references for later
+      this.mesh = mesh;
+      this.texture = null;
+      this.animState = { zoom: 1, panU: 0, panV: 0, panVelU: 0, panVelV: 0 };
+
+      // if src already present, load texture
+      if(data.src) this.loadTexture(data.src);
+    },
+    update: function(oldData){
+      if(oldData.src !== this.data.src && this.data.src){
+        this.loadTexture(this.data.src);
+      }
+    },
+    remove: function(){
+      if(this.mesh){
+        this.el.removeObject3D('mesh');
+      }
+    },
+    loadTexture: function(src){
+      const self = this;
+      // Use THREE.TextureLoader and ensure crossOrigin
+      const loader = new THREE.TextureLoader();
+      loader.setCrossOrigin('anonymous');
+      loader.load(src, function(tex){
+        // set high-quality parameters
+        try {
+          const renderer = self.el.sceneEl.renderer;
+          const maxAniso = renderer && renderer.capabilities ? renderer.capabilities.getMaxAnisotropy() : 1;
+          tex.anisotropy = maxAniso || 1;
+        } catch(e){ tex.anisotropy = 1; }
+        tex.encoding = THREE.sRGBEncoding;
+        tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+
+        // initialize subtle Ken Burns parameters per panel
+        const zoomTo = randRange(KB_ZOOM_MIN, KB_ZOOM_MAX);
+        const panU = randRange(0, 0.25);
+        const panV = randRange(0, 0.25);
+        const panVelU = (Math.random() > 0.5 ? 1 : -1) * randRange(KB_PAN_VEL_MIN, KB_PAN_VEL_MAX);
+        const panVelV = (Math.random() > 0.5 ? 1 : -1) * randRange(KB_PAN_VEL_MIN, KB_PAN_VEL_MAX);
+
+        tex.repeat.set(1/zoomTo, 1/zoomTo);
+        tex.offset.set(panU, panV);
+
+        // assign to mesh material
+        if(self.mesh && self.mesh.material){
+          self.mesh.material.map = tex;
+          self.mesh.material.needsUpdate = true;
+        }
+
+        // store texture and anim params
+        self.texture = tex;
+        self.animState.zoom = zoomTo;
+        self.animState.panVelU = panVelU;
+        self.animState.panVelV = panVelV;
+
+      }, undefined, function(err){
+        console.warn('Texture load error', err);
+      });
+    },
+    tick: function(time, dt){
+      // animate only texture UV (Ken Burns)
+      if(!this.texture) return;
+      const s = dt/1000;
+      // advance offsets
+      const st = this.animState;
+      st.panU = (st.panU + st.panVelU * s) % 1.0;
+      st.panV = (st.panV + st.panVelV * s) % 1.0;
+      this.texture.offset.set(st.panU, st.panV);
+      // Optionally, subtle zoom oscillation (small amplitude)
+      const zoomOsc = 1 + 0.01 * Math.sin(time / 3000 + (this.el.id ? this.el.id.length : 0));
+      const finalZoom = st.zoom * zoomOsc;
+      this.texture.repeat.set(1/finalZoom, 1/finalZoom);
+    }
+  });
+
+  // create a curved panel entity (helper)
+  function createCurvedPanel(meta, panelHeight){
     const aspect = meta.width && meta.height ? meta.width / meta.height : 1.5;
     const height = Math.max(0.5, panelHeight);
     let width = Math.max(0.6, height * aspect);
     if(width > MAX_PANEL_WIDTH) width = MAX_PANEL_WIDTH;
 
-    const plane = document.createElement('a-plane');
-    plane.setAttribute('width', width);
-    plane.setAttribute('height', height);
-    plane.setAttribute('position', `${pos.x} ${pos.y} ${pos.z}`);
-    plane.setAttribute('rotation', `0 ${-pos.theta * 180/Math.PI} 0`);
-    plane.setAttribute('material', `src: #${meta.id}; shader: flat; side:double;`);
-    plane.setAttribute('look-at', '#camera');
+    // position
+    const pos = positionFromAngles(FIXED_RADIUS);
 
-    // Ken Burns: scale-only (local scale animation)
-    const zoomTo = randRange(KB_ZOOM_MIN, KB_ZOOM_MAX);
-    const dur = Math.floor(randRange(KB_DURATION_MIN, KB_DURATION_MAX));
-    plane.setAttribute('animation__kb_scale', `property: scale; to: ${zoomTo} ${zoomTo} 1; dur: ${dur}; dir: alternate; loop: true; easing: easeInOutSine`);
+    const ent = document.createElement('a-entity');
+    ent.setAttribute('position', `${pos.x} ${pos.y} ${pos.z}`);
+    // rotation so that panel faces the camera: yaw rotation around Y is -theta deg
+    ent.setAttribute('rotation', `0 ${-pos.theta * 180/Math.PI} 0`);
 
-    return plane;
+    // add curved-panel with src pointing to the asset id
+    ent.setAttribute('curved-panel', `width: ${width}; height: ${height}; curvature: 0.45; src: #${meta.id}`);
+
+    // keep it looking at camera for tiny orientation guarantees (no transform animation)
+    ent.setAttribute('look-at', '#camera');
+
+    return ent;
   }
 
   // Build initial visible panels
@@ -206,20 +350,20 @@
     // fill visible panels
     for(let i=0;i<Math.min(VISIBLE_PANELS, unusedPool.length); i++){
       const m = unusedPool.shift();
-      const ent = createPlanePanel(m, panelHeight);
+      const ent = createCurvedPanel(m, panelHeight);
       panelContainer.appendChild(ent);
       panelEntities.push(ent);
     }
     // if not enough images, duplicate randomly to reach count
     while(panelEntities.length < VISIBLE_PANELS && metaList.length){
       const m = metaList[Math.floor(Math.random()*metaList.length)];
-      const ent = createPlanePanel(m, panelHeight);
+      const ent = createCurvedPanel(m, panelHeight);
       panelContainer.appendChild(ent);
       panelEntities.push(ent);
     }
   }
 
-  // Replace one panel (fade only -> no positional changes)
+  // Replace one panel (fade only -> texture swap, no position change)
   function replaceOnePanel(panelHeight){
     if(!panelEntities.length || !metaList.length) return;
     if(unusedPool.length === 0){
@@ -229,19 +373,36 @@
     // pick random index
     const idx = Math.floor(Math.random()*panelEntities.length);
     const old = panelEntities[idx];
-    try { old.setAttribute('animation__fadeout', `property: material.opacity; to: 0; dur: 600;`); } catch(e){}
-    setTimeout(()=>{
-      try{ old.parentNode.removeChild(old); } catch(e){}
-      const next = unusedPool.shift();
-      const newEnt = createPlanePanel(next, panelHeight);
-      // start invisible then fade in
-      try { newEnt.setAttribute('material','opacity:0; shader:flat; side:double;'); } catch(e){}
-      panelContainer.appendChild(newEnt);
-      setTimeout(()=> {
-        try { newEnt.setAttribute('animation__fadein', `property: material.opacity; to:1; dur:600;`); } catch(e){}
-      }, 40);
-      panelEntities[idx] = newEnt;
-    }, 620);
+
+    // Fade out by lowering material opacity (texture/material on mesh)
+    try {
+      const mesh = old.getObject3D('mesh');
+      if(mesh && mesh.material){
+        mesh.material.transparent = true;
+        // animate opacity over 600ms
+        const start = performance.now();
+        const from = mesh.material.opacity !== undefined ? mesh.material.opacity : 1;
+        (function fadeOut(now){
+          const t = (now - start) / 600;
+          mesh.material.opacity = Math.max(0, from * (1 - t));
+          if(t < 1) requestAnimationFrame(fadeOut);
+          else {
+            // swap texture
+            const next = unusedPool.shift();
+            // update component src so it reloads texture
+            old.setAttribute('curved-panel', `src: #${next.id}`);
+
+            // fade in
+            const startIn = performance.now();
+            (function fadeIn(nowIn){
+              const ti = (nowIn - startIn)/600;
+              mesh.material.opacity = Math.min(1, ti);
+              if(ti < 1) requestAnimationFrame(fadeIn);
+            }(startIn));
+          }
+        }(start));
+      }
+    } catch(e){ console.warn('Replace panel failed', e); }
   }
 
   function shuffleArray(arr){
