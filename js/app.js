@@ -1,12 +1,14 @@
 /**
- * VR Slideshow — R1.6
+ * VR Slideshow — R1.7 (app.js)
  * Date: 2025-11-27
  * Description:
- *   - Fixes vertical placement bias, increases radius to 1.8 m
- *   - Uses angle-based spherical placement centered on camera
- *   - Uses ClampToEdgeWrapping to avoid tiled edges
- *   - Stronger, visible Ken Burns (texture UV) with explicit needsUpdate
- *   - Preserves R1.3 UI wiring
+ *   - A-Frame based slideshow application (matching index.html Rev 1.7)
+ *   - Curved static panels (horizontal curvature only)
+ *   - Fixed radius: 1.8 m
+ *   - Middle 50% vertical band around camera height (elevation ±25°)
+ *   - Ken Burns removed — textures are static on panels
+ *   - High-quality textures: crossOrigin, anisotropy, sRGBEncoding, ClampToEdgeWrapping
+ *   - 8 fixed panels replaced over time by fading texture swaps
  */
 
 (function(){
@@ -24,15 +26,10 @@
   // Configuration
   const VISIBLE_PANELS = 8;
   const DEFAULT_PANEL_HEIGHTS = { small: 0.45, medium: 0.65, large: 1.0 };
-  const FIXED_RADIUS = 1.8;            // increased to 1.8m
+  const FIXED_RADIUS = 1.8;            // user requested
   const BAND_ELEVATION_DEG = 25;       // +/-25deg => middle 50%
   const MIN_ANGULAR_SEPARATION_DEG = 28;
   const MAX_PANEL_WIDTH = 2.4;
-
-  const KB_ZOOM_MIN = 1.05;
-  const KB_ZOOM_MAX = 1.18;
-  const KB_PAN_VEL_MIN = 0.002;
-  const KB_PAN_VEL_MAX = 0.006;
 
   // State
   let metaList = []; // { id, dataUrl, width, height }
@@ -55,13 +52,10 @@
       }
     } catch(e){}
   }
-  function clearLog(){
-    debugEl.textContent = '';
-    try { document.getElementById('vrDebug').setAttribute('visible', false); } catch(e){}
-  }
+  function clearLog(){ debugEl.textContent = ''; try { document.getElementById('vrDebug').setAttribute('visible', false); } catch(e){} }
   function randRange(a,b){ return a + Math.random() * (b - a); }
 
-  // File -> DataURL (preserve R1.3 behavior exactly)
+  // File -> DataURL
   function fileToDataURL(file){
     return new Promise((resolve,reject)=>{
       const reader = new FileReader();
@@ -79,7 +73,7 @@
     });
   }
 
-  // UI thumbnails (preserve R1.3 exact UI flow)
+  // UI thumbnails
   function addThumb(dataUrl, idx){
     const wrapper = document.createElement('div');
     wrapper.className = 'thumbWrapper';
@@ -95,10 +89,7 @@
     wrapper.appendChild(rm);
     imageListDiv.appendChild(wrapper);
   }
-  function rebuildThumbs(){
-    imageListDiv.innerHTML = '';
-    metaList.forEach((m,i)=> addThumb(m.dataUrl, i));
-  }
+  function rebuildThumbs(){ imageListDiv.innerHTML = ''; metaList.forEach((m,i)=> addThumb(m.dataUrl, i)); }
   function removeImage(index){
     const meta = metaList[index];
     if(!meta) return;
@@ -110,7 +101,7 @@
     startBtn.disabled = metaList.length < 1;
   }
 
-  // File picker event listener (kept intact from R1.3)
+  // File picker
   filePicker.addEventListener('change', async (evt)=>{
     const files = Array.from(filePicker.files || []);
     if(!files.length) return;
@@ -123,7 +114,6 @@
       const imgEl = document.createElement('img');
       imgEl.setAttribute('id', id);
       imgEl.setAttribute('src', dataUrl);
-      // ensure crossOrigin for texture loading
       imgEl.setAttribute('crossorigin','anonymous');
       aAssets.appendChild(imgEl);
 
@@ -139,14 +129,14 @@
     }
   });
 
-  // Choose separated yaw
+  // Choose a yaw that is at least MIN_ANGULAR_SEPARATION_DEG away from usedYaws
   function chooseSeparatedYaw(){
     const maxAttempts = 60;
     for(let attempt=0; attempt<maxAttempts; attempt++){
       const yawDeg = randRange(0,360);
       let ok = true;
       for(const used of usedYaws){
-        const diff = Math.abs(((yawDeg - used + 180 + 360) % 360) - 180);
+        const diff = Math.abs(((yawDeg - used + 180 + 360) % 360) - 180); // shortest difference
         if(diff < MIN_ANGULAR_SEPARATION_DEG){ ok = false; break; }
       }
       if(ok){ usedYaws.push(yawDeg); return yawDeg * Math.PI/180; }
@@ -156,7 +146,7 @@
     return fallback * Math.PI/180;
   }
 
-  // Angle-based spherical placement centered on camera (fixes upper-half bias)
+  // Angle-based spherical placement centered on camera
   function positionFromAngles(radius){
     const yaw = chooseSeparatedYaw();
     const elevationDeg = randRange(-BAND_ELEVATION_DEG, BAND_ELEVATION_DEG);
@@ -170,7 +160,7 @@
     return { x, y, z, theta, yawDeg: yaw * 180/Math.PI, elevationDeg };
   }
 
-  // Curved panel component (ClampToEdgeWrapping, explicit needsUpdate)
+  // Curved panel component (static textures — Ken Burns removed)
   AFRAME.registerComponent('curved-panel', {
     schema: {
       width: { type: 'number', default: 1.2 },
@@ -218,9 +208,6 @@
 
       this.mesh = mesh;
       this.texture = null;
-      this.animState = { zoom: 1, panU: 0, panV: 0, panVelU: 0, panVelV: 0 };
-
-      if(data.src) this.loadTexture(data.src);
     },
     update: function(oldData){
       if(oldData.src !== this.data.src && this.data.src){
@@ -240,17 +227,8 @@
             tex.encoding = THREE.sRGBEncoding;
             tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
 
-            const zoomTo = randRange(KB_ZOOM_MIN, KB_ZOOM_MAX);
-            const panU = randRange(0, 0.25);
-            const panV = randRange(0, 0.25);
-            const panVelU = (Math.random() > 0.5 ? 1 : -1) * randRange(KB_PAN_VEL_MIN, KB_PAN_VEL_MAX);
-            const panVelV = (Math.random() > 0.5 ? 1 : -1) * randRange(KB_PAN_VEL_MIN, KB_PAN_VEL_MAX);
-
-            tex.repeat.set(1/zoomTo, 1/zoomTo);
-            tex.offset.set(panU, panV);
-
             if(self.mesh && self.mesh.material){ self.mesh.material.map = tex; self.mesh.material.needsUpdate = true; }
-            self.texture = tex; self.animState.zoom = zoomTo; self.animState.panVelU = panVelU; self.animState.panVelV = panVelV;
+            self.texture = tex;
             return;
           }
         }
@@ -260,17 +238,10 @@
       loader.load(src, function(tex){
         try { const renderer = self.el.sceneEl.renderer; const maxAniso = renderer && renderer.capabilities ? renderer.capabilities.getMaxAnisotropy() : 1; tex.anisotropy = maxAniso || 1; } catch(e){ tex.anisotropy = 1; }
         tex.encoding = THREE.sRGBEncoding; tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
-        const zoomTo = randRange(KB_ZOOM_MIN, KB_ZOOM_MAX);
-        const panU = randRange(0, 0.25);
-        const panV = randRange(0, 0.25);
-        const panVelU = (Math.random() > 0.5 ? 1 : -1) * randRange(KB_PAN_VEL_MIN, KB_PAN_VEL_MAX);
-        const panVelV = (Math.random() > 0.5 ? 1 : -1) * randRange(KB_PAN_VEL_MIN, KB_PAN_VEL_MAX);
-        tex.repeat.set(1/zoomTo, 1/zoomTo); tex.offset.set(panU, panV);
         if(self.mesh && self.mesh.material){ self.mesh.material.map = tex; self.mesh.material.needsUpdate = true; }
-        self.texture = tex; self.animState.zoom = zoomTo; self.animState.panVelU = panVelU; self.animState.panVelV = panVelV;
+        self.texture = tex;
       }, undefined, function(err){
         console.warn('Texture load error', err);
-        // fallback: set a simple neutral color texture so the panel isn't invisible
         try {
           const placeholder = new THREE.Texture(generatePlaceholderCanvas(512, 512));
           placeholder.needsUpdate = true; placeholder.encoding = THREE.sRGBEncoding; placeholder.wrapS = placeholder.wrapT = THREE.ClampToEdgeWrapping;
@@ -278,20 +249,6 @@
           self.texture = placeholder;
         } catch(e){}
       });
-    },
-    tick: function(time, dt){
-      if(!this.texture) return;
-      const s = dt/1000;
-      const st = this.animState;
-      st.panU = (st.panU + st.panVelU * s) % 1.0;
-      st.panV = (st.panV + st.panVelV * s) % 1.0;
-      this.texture.offset.set(st.panU, st.panV);
-      const zoomOsc = 1 + 0.02 * Math.sin(time / 2200 + (this.el.id ? this.el.id.length : 0));
-      const finalZoom = st.zoom * zoomOsc;
-      this.texture.repeat.set(1/finalZoom, 1/finalZoom);
-      // force update for DOM-based textures and ensure material refresh
-      this.texture.needsUpdate = true;
-      if(this.mesh && this.mesh.material) this.mesh.material.needsUpdate = true;
     }
   });
 
@@ -319,44 +276,124 @@
     return ent;
   }
 
-  // Build panels
+  // Build initial visible panels
   async function buildPanels(panelHeight){
-    panelEntities.forEach(e=>{ try{ e.parentNode.removeChild(e); }catch(e){} }); panelEntities = []; usedYaws = [];
-    unusedPool = metaList.slice(); shuffleArray(unusedPool);
-    for(let i=0;i<Math.min(VISIBLE_PANELS, unusedPool.length); i++){ const m = unusedPool.shift(); const ent = createCurvedPanel(m, panelHeight); panelContainer.appendChild(ent); panelEntities.push(ent); }
-    while(panelEntities.length < VISIBLE_PANELS && metaList.length){ const m = metaList[Math.floor(Math.random()*metaList.length)]; const ent = createCurvedPanel(m, panelHeight); panelContainer.appendChild(ent); panelEntities.push(ent); }
+    panelEntities.forEach(e=>{ try{ e.parentNode.removeChild(e); }catch(e){} });
+    panelEntities = [];
+    usedYaws = [];
+
+    unusedPool = metaList.slice();
+    shuffleArray(unusedPool);
+
+    for(let i=0;i<Math.min(VISIBLE_PANELS, unusedPool.length); i++){
+      const m = unusedPool.shift();
+      const ent = createCurvedPanel(m, panelHeight);
+      panelContainer.appendChild(ent);
+      panelEntities.push(ent);
+    }
+    while(panelEntities.length < VISIBLE_PANELS && metaList.length){
+      const m = metaList[Math.floor(Math.random()*metaList.length)];
+      const ent = createCurvedPanel(m, panelHeight);
+      panelContainer.appendChild(ent);
+      panelEntities.push(ent);
+    }
   }
 
   // Replace one panel (texture swap + fade)
   function replaceOnePanel(panelHeight){
-    if(!panelEntities.length || !metaList.length) return; if(unusedPool.length === 0){ unusedPool = metaList.slice(); shuffleArray(unusedPool); }
-    const idx = Math.floor(Math.random()*panelEntities.length); const old = panelEntities[idx];
+    if(!panelEntities.length || !metaList.length) return;
+    if(unusedPool.length === 0){
+      unusedPool = metaList.slice();
+      shuffleArray(unusedPool);
+    }
+    const idx = Math.floor(Math.random()*panelEntities.length);
+    const old = panelEntities[idx];
+
     try {
       const mesh = old.getObject3D('mesh');
-      if(mesh && mesh.material){ mesh.material.transparent = true; const start = performance.now(); const from = mesh.material.opacity !== undefined ? mesh.material.opacity : 1;
-        (function fadeOut(now){ const t = (now - start) / 600; mesh.material.opacity = Math.max(0, from * (1 - t)); if(t < 1) requestAnimationFrame(fadeOut); else { const next = unusedPool.shift(); old.setAttribute('curved-panel', `src: #${next.id}`); const startIn = performance.now(); (function fadeIn(nowIn){ const ti = (nowIn - startIn)/600; mesh.material.opacity = Math.min(1, ti); if(ti < 1) requestAnimationFrame(fadeIn); }(startIn)); } }(start)); }
+      if(mesh && mesh.material){
+        mesh.material.transparent = true;
+        const start = performance.now();
+        const from = mesh.material.opacity !== undefined ? mesh.material.opacity : 1;
+        (function fadeOut(now){
+          const t = (now - start) / 600;
+          mesh.material.opacity = Math.max(0, from * (1 - t));
+          if(t < 1) requestAnimationFrame(fadeOut);
+          else {
+            const next = unusedPool.shift();
+            old.setAttribute('curved-panel', `src: #${next.id}`);
+            const startIn = performance.now();
+            (function fadeIn(nowIn){
+              const ti = (nowIn - startIn)/600;
+              mesh.material.opacity = Math.min(1, ti);
+              if(ti < 1) requestAnimationFrame(fadeIn);
+            }(startIn));
+          }
+        }(start));
+      }
     } catch(e){ console.warn('Replace panel failed', e); }
   }
 
   function shuffleArray(arr){ for(let i=arr.length-1;i>0;i--){ const j = Math.floor(Math.random()*(i+1)); [arr[i], arr[j]] = [arr[j], arr[i]]; } }
 
-  function waitForAssetsLoaded(){ const imgs = Array.from(aAssets.querySelectorAll('img')); return Promise.all(imgs.map(img => new Promise((resolve)=>{ if(img.complete && img.naturalWidth>0) return resolve(); img.onload = ()=> resolve(); img.onerror = ()=> { log('Asset failed: ' + (img.id||'unknown')); resolve(); }; }))); }
+  function waitForAssetsLoaded(){
+    const imgs = Array.from(aAssets.querySelectorAll('img'));
+    return Promise.all(imgs.map(img => new Promise((resolve)=>{
+      if(img.complete && img.naturalWidth>0) return resolve();
+      img.onload = ()=> resolve();
+      img.onerror = ()=> { log('Asset failed: ' + (img.id||'unknown')); resolve(); };
+    })));
+  }
 
-  // Start button handler (preserve R1.3 flow)
+  // Start button
   startBtn.addEventListener('click', async ()=>{
-    startBtn.disabled = true; statusEl.textContent = 'Preparing slideshow — building textures...'; clearLog();
+    startBtn.disabled = true;
+    statusEl.textContent = 'Preparing slideshow — building textures...';
+    clearLog();
+
     if(!metaList.length){ statusEl.textContent = 'Select at least 1 image first.'; startBtn.disabled = false; return; }
-    const sizeKey = document.getElementById('panelSize').value || 'medium'; const panelHeight = DEFAULT_PANEL_HEIGHTS[sizeKey] || DEFAULT_PANEL_HEIGHTS.medium;
-    try{ await waitForAssetsLoaded(); await buildPanels(panelHeight); } catch(err){ log('Build panels error: ' + (err && err.message?err.message:err)); startBtn.disabled = false; return; }
-    document.getElementById('controls').style.display = 'none'; scene.style.display = 'block';
-    setTimeout(async ()=>{ try { await scene.enterVR(); } catch(err){ log('Failed to enter VR: ' + (err && err.message?err.message:err)); document.getElementById('controls').style.display = ''; scene.style.display = 'none'; startBtn.disabled = false; return; }
-      const interval = Math.max(1, parseFloat(document.getElementById('replaceInterval').value) || 5); if(replaceTimer) clearInterval(replaceTimer); replaceTimer = setInterval(()=> { try { replaceOnePanel(panelHeight); } catch(e) { log('Replace error: ' + e); } }, interval * 1000);
-      statusEl.textContent = 'Slideshow running.'; clearLog(); }, 120);
+
+    const sizeKey = document.getElementById('panelSize').value || 'medium';
+    const panelHeight = DEFAULT_PANEL_HEIGHTS[sizeKey] || DEFAULT_PANEL_HEIGHTS.medium;
+
+    try{
+      await waitForAssetsLoaded();
+      await buildPanels(panelHeight);
+    } catch(err){
+      log('Build panels error: ' + (err && err.message?err.message:err));
+      startBtn.disabled = false;
+      return;
+    }
+
+    document.getElementById('controls').style.display = 'none';
+    scene.style.display = 'block';
+
+    setTimeout(async ()=>{
+      try {
+        await scene.enterVR();
+      } catch(err){
+        log('Failed to enter VR: ' + (err && err.message?err.message:err));
+        document.getElementById('controls').style.display = '';
+        scene.style.display = 'none';
+        startBtn.disabled = false;
+        return;
+      }
+
+      const interval = Math.max(1, parseFloat(document.getElementById('replaceInterval').value) || 5);
+      if(replaceTimer) clearInterval(replaceTimer);
+      replaceTimer = setInterval(()=> {
+        try { replaceOnePanel(panelHeight); } catch(e) { log('Replace error: ' + e); }
+      }, interval * 1000);
+
+      statusEl.textContent = 'Slideshow running.';
+      clearLog();
+    }, 120);
   });
 
+  // cleanup
   window.addEventListener('beforeunload', ()=>{ if(replaceTimer) clearInterval(replaceTimer); });
 
-  // debug
+  // quick debug
   window._vrslideshow = { metaList };
 
 })();
