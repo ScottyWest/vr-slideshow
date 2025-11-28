@@ -202,7 +202,6 @@
       const geom = new THREE.PlaneGeometry(width, height, segW, segH);
 
       // Bend geometry horizontally by mapping X to an arc
-      // curvature parameter maps to a bend radius: larger curvature -> smaller radius
       const bend = Math.max(0, Math.min(1, data.curvature));
       const arc = bend * Math.PI / 4; // up to 45 degrees arc
       const radius = (arc > 0) ? (width / arc) : 1000;
@@ -220,7 +219,6 @@
           pos.setZ(i, newZ);
           pos.setY(i, vy);
         } else {
-          // flat plane
           pos.setX(i, vx);
           pos.setZ(i, 0);
           pos.setY(i, vy);
@@ -228,8 +226,120 @@
       }
       geom.computeVertexNormals();
 
-      // Create a placeholder material (will set texture later)
-      const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+      // Create material now without a texture; we'll attach texture when available
+      const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide, transparent: true, opacity: 1 });
+
+      const mesh = new THREE.Mesh(geom, mat);
+      mesh.rotation.x = 0;
+
+      el.setObject3D('mesh', mesh);
+
+      // store references for later
+      this.mesh = mesh;
+      this.texture = null;
+      this.animState = { zoom: 1, panU: 0, panV: 0, panVelU: 0, panVelV: 0 };
+
+      if(data.src) this.loadTexture(data.src);
+    },
+    update: function(oldData){
+      if(oldData.src !== this.data.src && this.data.src){
+        this.loadTexture(this.data.src);
+      }
+    },
+    remove: function(){
+      if(this.mesh){
+        this.el.removeObject3D('mesh');
+      }
+    },
+    loadTexture: function(src){
+      const self = this;
+      // If src is an asset selector (e.g. "#img0"), use the DOM img element directly to build a THREE.Texture.
+      try {
+        if(typeof src === 'string' && src.charAt(0) === '#'){
+          const imgEl = document.querySelector(src);
+          if(imgEl){
+            const tex = new THREE.Texture(imgEl);
+            tex.needsUpdate = true;
+            // high-quality params
+            try {
+              const renderer = self.el.sceneEl.renderer;
+              const maxAniso = renderer && renderer.capabilities ? renderer.capabilities.getMaxAnisotropy() : 1;
+              tex.anisotropy = maxAniso || 1;
+            } catch(e){ tex.anisotropy = 1; }
+            tex.encoding = THREE.sRGBEncoding;
+            tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+
+            // initialize subtle Ken Burns parameters per panel
+            const zoomTo = randRange(KB_ZOOM_MIN, KB_ZOOM_MAX);
+            const panU = randRange(0, 0.25);
+            const panV = randRange(0, 0.25);
+            const panVelU = (Math.random() > 0.5 ? 1 : -1) * randRange(KB_PAN_VEL_MIN, KB_PAN_VEL_MAX);
+            const panVelV = (Math.random() > 0.5 ? 1 : -1) * randRange(KB_PAN_VEL_MIN, KB_PAN_VEL_MAX);
+
+            tex.repeat.set(1/zoomTo, 1/zoomTo);
+            tex.offset.set(panU, panV);
+
+            if(self.mesh && self.mesh.material){
+              self.mesh.material.map = tex;
+              self.mesh.material.needsUpdate = true;
+            }
+
+            self.texture = tex;
+            self.animState.zoom = zoomTo;
+            self.animState.panVelU = panVelU;
+            self.animState.panVelV = panVelV;
+            return;
+          }
+        }
+      } catch(e){ console.warn('DOM texture path failed', e); }
+
+      // Fallback: try loading via TextureLoader if src is a URL
+      const loader = new THREE.TextureLoader();
+      loader.setCrossOrigin('anonymous');
+      loader.load(src, function(tex){
+        try {
+          const renderer = self.el.sceneEl.renderer;
+          const maxAniso = renderer && renderer.capabilities ? renderer.capabilities.getMaxAnisotropy() : 1;
+          tex.anisotropy = maxAniso || 1;
+        } catch(e){ tex.anisotropy = 1; }
+        tex.encoding = THREE.sRGBEncoding;
+        tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+
+        const zoomTo = randRange(KB_ZOOM_MIN, KB_ZOOM_MAX);
+        const panU = randRange(0, 0.25);
+        const panV = randRange(0, 0.25);
+        const panVelU = (Math.random() > 0.5 ? 1 : -1) * randRange(KB_PAN_VEL_MIN, KB_PAN_VEL_MAX);
+        const panVelV = (Math.random() > 0.5 ? 1 : -1) * randRange(KB_PAN_VEL_MIN, KB_PAN_VEL_MAX);
+
+        tex.repeat.set(1/zoomTo, 1/zoomTo);
+        tex.offset.set(panU, panV);
+
+        if(self.mesh && self.mesh.material){
+          self.mesh.material.map = tex;
+          self.mesh.material.needsUpdate = true;
+        }
+
+        self.texture = tex;
+        self.animState.zoom = zoomTo;
+        self.animState.panVelU = panVelU;
+        self.animState.panVelV = panVelV;
+
+      }, undefined, function(err){
+        console.warn('Texture load error', err);
+      });
+    },
+    tick: function(time, dt){
+      if(!this.texture) return;
+      const s = dt/1000;
+      const st = this.animState;
+      st.panU = (st.panU + st.panVelU * s) % 1.0;
+      st.panV = (st.panV + st.panVelV * s) % 1.0;
+      this.texture.offset.set(st.panU, st.panV);
+      const zoomOsc = 1 + 0.01 * Math.sin(time / 3000 + (this.el.id ? this.el.id.length : 0));
+      const finalZoom = st.zoom * zoomOsc;
+      this.texture.repeat.set(1/finalZoom, 1/finalZoom);
+    }
+  });
 
       const mesh = new THREE.Mesh(geom, mat);
       // rotate so the plane faces outward along -Z by default; we'll rotate entity later
