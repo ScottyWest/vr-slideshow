@@ -1,11 +1,12 @@
 /**
- * VR Slideshow — R1.5
+ * VR Slideshow — R1.6
  * Date: 2025-11-27
  * Description:
- *   - Starts from Rev 1.3 UI wiring (unchanged) to avoid regressions
- *   - Adds curved panels, high-quality textures, Ken Burns on UVs only
- *   - Middle 50% vertical band around camera height
- *   - Fixed radius 1.5m, 8 panels, proper angular separation
+ *   - Fixes vertical placement bias, increases radius to 1.8 m
+ *   - Uses angle-based spherical placement centered on camera
+ *   - Uses ClampToEdgeWrapping to avoid tiled edges
+ *   - Stronger, visible Ken Burns (texture UV) with explicit needsUpdate
+ *   - Preserves R1.3 UI wiring
  */
 
 (function(){
@@ -23,15 +24,15 @@
   // Configuration
   const VISIBLE_PANELS = 8;
   const DEFAULT_PANEL_HEIGHTS = { small: 0.45, medium: 0.65, large: 1.0 };
-  const FIXED_RADIUS = 1.5;            // comfortable arms-length (meters)
-  const BAND_FRACTION = 0.5;          // middle 50% of vertical slice
+  const FIXED_RADIUS = 1.8;            // increased to 1.8m
+  const BAND_ELEVATION_DEG = 25;       // +/-25deg => middle 50%
   const MIN_ANGULAR_SEPARATION_DEG = 28;
   const MAX_PANEL_WIDTH = 2.4;
 
-  const KB_ZOOM_MIN = 1.03;
-  const KB_ZOOM_MAX = 1.12;
-  const KB_PAN_VEL_MIN = 0.0008;
-  const KB_PAN_VEL_MAX = 0.0025;
+  const KB_ZOOM_MIN = 1.05;
+  const KB_ZOOM_MAX = 1.18;
+  const KB_PAN_VEL_MIN = 0.002;
+  const KB_PAN_VEL_MAX = 0.006;
 
   // State
   let metaList = []; // { id, dataUrl, width, height }
@@ -155,21 +156,21 @@
     return fallback * Math.PI/180;
   }
 
-  // Position calculation (middle 50% vertical band)
+  // Angle-based spherical placement centered on camera (fixes upper-half bias)
   function positionFromAngles(radius){
     const yaw = chooseSeparatedYaw();
+    const elevationDeg = randRange(-BAND_ELEVATION_DEG, BAND_ELEVATION_DEG);
+    const elev = elevationDeg * Math.PI/180;
     const camPos = cameraEl.getAttribute('position') || { x:0, y:1.6, z:0 };
-    const bandHeight = 2 * radius * (BAND_FRACTION/2); // simplifies to radius * BAND_FRACTION
-    const y = camPos.y + randRange(-bandHeight/2, bandHeight/2);
-    const clampedY = Math.max(-radius + 0.01, Math.min(radius - 0.01, y - 0));
-    const horizDist = Math.sqrt(Math.max(0, radius*radius - clampedY*clampedY));
-    const x = horizDist * Math.sin(yaw);
-    const z = -horizDist * Math.cos(yaw);
+
+    const x = radius * Math.cos(elev) * Math.sin(yaw);
+    const y = camPos.y + radius * Math.sin(elev);
+    const z = -radius * Math.cos(elev) * Math.cos(yaw);
     const theta = Math.atan2(x, -z);
-    return { x, y: clampedY, z, theta, yawDeg: yaw * 180/Math.PI };
+    return { x, y, z, theta, yawDeg: yaw * 180/Math.PI, elevationDeg };
   }
 
-  // Curved panel component (robust texture loading; DOM asset or URL)
+  // Curved panel component (ClampToEdgeWrapping, explicit needsUpdate)
   AFRAME.registerComponent('curved-panel', {
     schema: {
       width: { type: 'number', default: 1.2 },
@@ -236,7 +237,8 @@
             const tex = new THREE.Texture(imgEl);
             tex.needsUpdate = true;
             try { const renderer = self.el.sceneEl.renderer; const maxAniso = renderer && renderer.capabilities ? renderer.capabilities.getMaxAnisotropy() : 1; tex.anisotropy = maxAniso || 1; } catch(e){ tex.anisotropy = 1; }
-            tex.encoding = THREE.sRGBEncoding; tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+            tex.encoding = THREE.sRGBEncoding;
+            tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
 
             const zoomTo = randRange(KB_ZOOM_MIN, KB_ZOOM_MAX);
             const panU = randRange(0, 0.25);
@@ -257,7 +259,7 @@
       const loader = new THREE.TextureLoader(); loader.setCrossOrigin('anonymous');
       loader.load(src, function(tex){
         try { const renderer = self.el.sceneEl.renderer; const maxAniso = renderer && renderer.capabilities ? renderer.capabilities.getMaxAnisotropy() : 1; tex.anisotropy = maxAniso || 1; } catch(e){ tex.anisotropy = 1; }
-        tex.encoding = THREE.sRGBEncoding; tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+        tex.encoding = THREE.sRGBEncoding; tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
         const zoomTo = randRange(KB_ZOOM_MIN, KB_ZOOM_MAX);
         const panU = randRange(0, 0.25);
         const panV = randRange(0, 0.25);
@@ -266,14 +268,41 @@
         tex.repeat.set(1/zoomTo, 1/zoomTo); tex.offset.set(panU, panV);
         if(self.mesh && self.mesh.material){ self.mesh.material.map = tex; self.mesh.material.needsUpdate = true; }
         self.texture = tex; self.animState.zoom = zoomTo; self.animState.panVelU = panVelU; self.animState.panVelV = panVelV;
-      }, undefined, function(err){ console.warn('Texture load error', err); });
+      }, undefined, function(err){
+        console.warn('Texture load error', err);
+        // fallback: set a simple neutral color texture so the panel isn't invisible
+        try {
+          const placeholder = new THREE.Texture(generatePlaceholderCanvas(512, 512));
+          placeholder.needsUpdate = true; placeholder.encoding = THREE.sRGBEncoding; placeholder.wrapS = placeholder.wrapT = THREE.ClampToEdgeWrapping;
+          if(self.mesh && self.mesh.material){ self.mesh.material.map = placeholder; self.mesh.material.needsUpdate = true; }
+          self.texture = placeholder;
+        } catch(e){}
+      });
     },
     tick: function(time, dt){
-      if(!this.texture) return; const s = dt/1000; const st = this.animState;
-      st.panU = (st.panU + st.panVelU * s) % 1.0; st.panV = (st.panV + st.panVelV * s) % 1.0; this.texture.offset.set(st.panU, st.panV);
-      const zoomOsc = 1 + 0.01 * Math.sin(time / 3000 + (this.el.id ? this.el.id.length : 0)); const finalZoom = st.zoom * zoomOsc; this.texture.repeat.set(1/finalZoom, 1/finalZoom);
+      if(!this.texture) return;
+      const s = dt/1000;
+      const st = this.animState;
+      st.panU = (st.panU + st.panVelU * s) % 1.0;
+      st.panV = (st.panV + st.panVelV * s) % 1.0;
+      this.texture.offset.set(st.panU, st.panV);
+      const zoomOsc = 1 + 0.02 * Math.sin(time / 2200 + (this.el.id ? this.el.id.length : 0));
+      const finalZoom = st.zoom * zoomOsc;
+      this.texture.repeat.set(1/finalZoom, 1/finalZoom);
+      // force update for DOM-based textures and ensure material refresh
+      this.texture.needsUpdate = true;
+      if(this.mesh && this.mesh.material) this.mesh.material.needsUpdate = true;
     }
   });
+
+  // helper to generate a simple placeholder checkerboard canvas
+  function generatePlaceholderCanvas(w, h){
+    const cvs = document.createElement('canvas'); cvs.width = w; cvs.height = h; const ctx = cvs.getContext('2d');
+    ctx.fillStyle = '#666'; ctx.fillRect(0,0,w,h);
+    ctx.fillStyle = '#999';
+    const size = 32; for(let y=0;y<h;y+=size){ for(let x=0;x<w;x+=size){ if(((x+y)/size|0)%2===0){ ctx.fillRect(x,y,size,size); } }}
+    return cvs;
+  }
 
   // Create curved panel entity
   function createCurvedPanel(meta, panelHeight){
