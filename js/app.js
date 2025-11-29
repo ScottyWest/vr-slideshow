@@ -1,12 +1,11 @@
 /**
- * VR Slideshow — R1.8
- * Date: 2025-11-27
+ * VR Slideshow — R1.9
+ * Date: 2025-11-28
  * Description:
- *   - Improved texture quality (min/mag filters, anisotropy, mipmaps)
- *   - Increased horizontal curvature for panels
- *   - Radius kept at 1.8 m
- *   - Ken Burns removed (static textures)
- *   - Preserves UI flow from R1.3/R1.5
+ *   - Tuned texture sampling to reduce aliasing/static artifacts while preserving sharpness
+ *   - Moderate anisotropy and linear mipmapped filtering
+ *   - Curved panels (horizontal curvature), radius 1.8m
+ *   - Ken Burns removed — static textures on panels
  */
 
 (function(){
@@ -29,8 +28,10 @@
   const MIN_ANGULAR_SEPARATION_DEG = 28;
   const MAX_PANEL_WIDTH = 2.4;
 
-  // Slightly stronger curvature for Rev 1.8 (more noticeable)
-  const PANEL_CURVATURE = 0.6; // 0..1 where higher -> more curve
+  // Texture tuning (Rev 1.9)
+  const DESIRED_ANISOTROPY = 6; // moderate — reduces grain/static
+  // Curvature
+  const PANEL_CURVATURE = 0.6;
 
   // State
   let metaList = []; // { id, dataUrl, width, height }
@@ -161,7 +162,7 @@
     return { x, y, z, theta, yawDeg: yaw * 180/Math.PI, elevationDeg };
   }
 
-  // Curved panel component (static textures — improved texture settings & stronger curvature)
+  // Curved panel component (static textures — quality tuned)
   AFRAME.registerComponent('curved-panel', {
     schema: {
       width: { type: 'number', default: 1.2 },
@@ -181,7 +182,7 @@
 
       const geom = new THREE.PlaneGeometry(width, height, segW, segH);
       const bend = Math.max(0, Math.min(1, data.curvature));
-      const arc = bend * Math.PI / 3; // increase arc for stronger curve
+      const arc = bend * Math.PI / 3; // stronger curve than earlier revs
       const radius = (arc > 0) ? (width / arc) : 1000;
       const posAttr = geom.attributes.position;
       for(let i=0;i<posAttr.count;i++){
@@ -223,11 +224,10 @@
           const imgEl = document.querySelector(src);
           if(imgEl){
             const tex = new THREE.Texture(imgEl);
-            // improved quality
-            try { const renderer = self.el.sceneEl.renderer; const maxAniso = renderer && renderer.capabilities ? renderer.capabilities.getMaxAnisotropy() : 1; tex.anisotropy = maxAniso || 1; } catch(e){ tex.anisotropy = 1; }
+            try { const renderer = self.el.sceneEl.renderer; const maxAniso = renderer && renderer.capabilities ? renderer.capabilities.getMaxAnisotropy() : DESIRED_ANISOTROPY; tex.anisotropy = Math.min(DESIRED_ANISOTROPY, maxAniso || DESIRED_ANISOTROPY); } catch(e){ tex.anisotropy = DESIRED_ANISOTROPY; }
             tex.encoding = THREE.sRGBEncoding;
             tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
-            tex.minFilter = THREE.LinearFilter;
+            tex.minFilter = THREE.LinearMipmapLinearFilter;
             tex.magFilter = THREE.LinearFilter;
             tex.generateMipmaps = true;
             tex.needsUpdate = true;
@@ -241,10 +241,10 @@
 
       const loader = new THREE.TextureLoader(); loader.setCrossOrigin('anonymous');
       loader.load(src, function(tex){
-        try { const renderer = self.el.sceneEl.renderer; const maxAniso = renderer && renderer.capabilities ? renderer.capabilities.getMaxAnisotropy() : 1; tex.anisotropy = maxAniso || 1; } catch(e){ tex.anisotropy = 1; }
+        try { const renderer = self.el.sceneEl.renderer; const maxAniso = renderer && renderer.capabilities ? renderer.capabilities.getMaxAnisotropy() : DESIRED_ANISOTROPY; tex.anisotropy = Math.min(DESIRED_ANISOTROPY, maxAniso || DESIRED_ANISOTROPY); } catch(e){ tex.anisotropy = DESIRED_ANISOTROPY; }
         tex.encoding = THREE.sRGBEncoding;
         tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
-        tex.minFilter = THREE.LinearFilter;
+        tex.minFilter = THREE.LinearMipmapLinearFilter;
         tex.magFilter = THREE.LinearFilter;
         tex.generateMipmaps = true;
 
