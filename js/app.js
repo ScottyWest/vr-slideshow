@@ -1,14 +1,12 @@
 /**
- * VR Slideshow — R1.7 (app.js)
+ * VR Slideshow — R1.8
  * Date: 2025-11-27
  * Description:
- *   - A-Frame based slideshow application (matching index.html Rev 1.7)
- *   - Curved static panels (horizontal curvature only)
- *   - Fixed radius: 1.8 m
- *   - Middle 50% vertical band around camera height (elevation ±25°)
- *   - Ken Burns removed — textures are static on panels
- *   - High-quality textures: crossOrigin, anisotropy, sRGBEncoding, ClampToEdgeWrapping
- *   - 8 fixed panels replaced over time by fading texture swaps
+ *   - Improved texture quality (min/mag filters, anisotropy, mipmaps)
+ *   - Increased horizontal curvature for panels
+ *   - Radius kept at 1.8 m
+ *   - Ken Burns removed (static textures)
+ *   - Preserves UI flow from R1.3/R1.5
  */
 
 (function(){
@@ -26,10 +24,13 @@
   // Configuration
   const VISIBLE_PANELS = 8;
   const DEFAULT_PANEL_HEIGHTS = { small: 0.45, medium: 0.65, large: 1.0 };
-  const FIXED_RADIUS = 1.8;            // user requested
+  const FIXED_RADIUS = 1.8;
   const BAND_ELEVATION_DEG = 25;       // +/-25deg => middle 50%
   const MIN_ANGULAR_SEPARATION_DEG = 28;
   const MAX_PANEL_WIDTH = 2.4;
+
+  // Slightly stronger curvature for Rev 1.8 (more noticeable)
+  const PANEL_CURVATURE = 0.6; // 0..1 where higher -> more curve
 
   // State
   let metaList = []; // { id, dataUrl, width, height }
@@ -160,13 +161,13 @@
     return { x, y, z, theta, yawDeg: yaw * 180/Math.PI, elevationDeg };
   }
 
-  // Curved panel component (static textures — Ken Burns removed)
+  // Curved panel component (static textures — improved texture settings & stronger curvature)
   AFRAME.registerComponent('curved-panel', {
     schema: {
       width: { type: 'number', default: 1.2 },
       height: { type: 'number', default: 0.8 },
-      curvature: { type: 'number', default: 0.45 },
-      segmentsW: { type: 'int', default: 24 },
+      curvature: { type: 'number', default: PANEL_CURVATURE },
+      segmentsW: { type: 'int', default: 48 },
       segmentsH: { type: 'int', default: 12 },
       src: { type: 'string', default: '' }
     },
@@ -180,7 +181,7 @@
 
       const geom = new THREE.PlaneGeometry(width, height, segW, segH);
       const bend = Math.max(0, Math.min(1, data.curvature));
-      const arc = bend * Math.PI / 4;
+      const arc = bend * Math.PI / 3; // increase arc for stronger curve
       const radius = (arc > 0) ? (width / arc) : 1000;
       const posAttr = geom.attributes.position;
       for(let i=0;i<posAttr.count;i++){
@@ -222,10 +223,14 @@
           const imgEl = document.querySelector(src);
           if(imgEl){
             const tex = new THREE.Texture(imgEl);
-            tex.needsUpdate = true;
+            // improved quality
             try { const renderer = self.el.sceneEl.renderer; const maxAniso = renderer && renderer.capabilities ? renderer.capabilities.getMaxAnisotropy() : 1; tex.anisotropy = maxAniso || 1; } catch(e){ tex.anisotropy = 1; }
             tex.encoding = THREE.sRGBEncoding;
             tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+            tex.minFilter = THREE.LinearFilter;
+            tex.magFilter = THREE.LinearFilter;
+            tex.generateMipmaps = true;
+            tex.needsUpdate = true;
 
             if(self.mesh && self.mesh.material){ self.mesh.material.map = tex; self.mesh.material.needsUpdate = true; }
             self.texture = tex;
@@ -237,7 +242,12 @@
       const loader = new THREE.TextureLoader(); loader.setCrossOrigin('anonymous');
       loader.load(src, function(tex){
         try { const renderer = self.el.sceneEl.renderer; const maxAniso = renderer && renderer.capabilities ? renderer.capabilities.getMaxAnisotropy() : 1; tex.anisotropy = maxAniso || 1; } catch(e){ tex.anisotropy = 1; }
-        tex.encoding = THREE.sRGBEncoding; tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+        tex.encoding = THREE.sRGBEncoding;
+        tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+        tex.minFilter = THREE.LinearFilter;
+        tex.magFilter = THREE.LinearFilter;
+        tex.generateMipmaps = true;
+
         if(self.mesh && self.mesh.material){ self.mesh.material.map = tex; self.mesh.material.needsUpdate = true; }
         self.texture = tex;
       }, undefined, function(err){
@@ -271,7 +281,7 @@
     const ent = document.createElement('a-entity');
     ent.setAttribute('position', `${pos.x} ${pos.y} ${pos.z}`);
     ent.setAttribute('rotation', `0 ${-pos.theta * 180/Math.PI} 0`);
-    ent.setAttribute('curved-panel', `width: ${width}; height: ${height}; curvature: 0.45; src: #${meta.id}`);
+    ent.setAttribute('curved-panel', `width: ${width}; height: ${height}; curvature: ${PANEL_CURVATURE}; src: #${meta.id}`);
     ent.setAttribute('look-at', '#camera');
     return ent;
   }
