@@ -1,11 +1,8 @@
 /**
- * VR Slideshow — R1.9
+ * VR Slideshow — Rev 2.0
  * Date: 2025-11-28
- * Description:
- *   - Tuned texture sampling to reduce aliasing/static artifacts while preserving sharpness
- *   - Moderate anisotropy and linear mipmapped filtering
- *   - Curved panels (horizontal curvature), radius 1.8m
- *   - Ken Burns removed — static textures on panels
+ * Purpose: Add image sequencing — no duplicates until all images used.
+ * Keeps the A-Frame curved panel approach, radius 1.8m, tuned texture settings.
  */
 
 (function(){
@@ -28,8 +25,8 @@
   const MIN_ANGULAR_SEPARATION_DEG = 28;
   const MAX_PANEL_WIDTH = 2.4;
 
-  // Texture tuning (Rev 1.9)
-  const DESIRED_ANISOTROPY = 6; // moderate — reduces grain/static
+  // Texture tuning
+  const DESIRED_ANISOTROPY = 6; // moderate
   // Curvature
   const PANEL_CURVATURE = 0.6;
 
@@ -37,9 +34,13 @@
   let metaList = []; // { id, dataUrl, width, height }
   let nextAssetId = 0;
   let panelEntities = [];
-  let unusedPool = [];
+  let unusedPool = [];      // pool used for replacements (Rev 2.0 will manage uniqueness)
   let replaceTimer = null;
   let usedYaws = [];
+
+  // New sequencing lists (Rev 2.0)
+  let sequencingUnused = []; // images not yet used in current cycle
+  let sequencingUsed = [];   // images already used in this cycle
 
   // Helpers
   function log(msg){
@@ -101,26 +102,31 @@
     rebuildThumbs();
     statusEl.textContent = `${metaList.length} images selected.`;
     startBtn.disabled = metaList.length < 1;
+    // Update sequencing pools if running
+    sequencingUnused = sequencingUnused.filter(m => m.id !== meta.id);
+    sequencingUsed = sequencingUsed.filter(m => m.id !== meta.id);
   }
 
-  // File picker
+  // File picker (supports multiple)
   filePicker.addEventListener('change', async (evt)=>{
     const files = Array.from(filePicker.files || []);
     if(!files.length) return;
-    const f = files[0];
-    statusEl.textContent = `Converting ${f.name}...`;
-    try {
-      const dataUrl = await fileToDataURL(f);
-      const dims = await getImageDimensionsFromDataUrl(dataUrl);
-      const id = `img${nextAssetId++}`;
-      const imgEl = document.createElement('img');
-      imgEl.setAttribute('id', id);
-      imgEl.setAttribute('src', dataUrl);
-      imgEl.setAttribute('crossorigin','anonymous');
-      aAssets.appendChild(imgEl);
 
-      metaList.push({ id, dataUrl, width: dims.width, height: dims.height });
-      addThumb(dataUrl, metaList.length-1);
+    statusEl.textContent = `Adding ${files.length} image(s)...`;
+    try {
+      for (const f of files){
+        const dataUrl = await fileToDataURL(f);
+        const dims = await getImageDimensionsFromDataUrl(dataUrl);
+        const id = `img${nextAssetId++}`;
+        const imgEl = document.createElement('img');
+        imgEl.setAttribute('id', id);
+        imgEl.setAttribute('src', dataUrl);
+        imgEl.setAttribute('crossorigin','anonymous');
+        aAssets.appendChild(imgEl);
+
+        metaList.push({ id, dataUrl, width: dims.width, height: dims.height });
+        addThumb(dataUrl, metaList.length-1);
+      }
       statusEl.textContent = `${metaList.length} images selected.`;
       startBtn.disabled = metaList.length < 1;
       clearLog();
@@ -131,14 +137,44 @@
     }
   });
 
-  // Choose a yaw that is at least MIN_ANGULAR_SEPARATION_DEG away from usedYaws
+  // shuffle helper
+  function shuffleArray(arr){
+    for(let i=arr.length-1;i>0;i--){
+      const j = Math.floor(Math.random()*(i+1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+  }
+
+  // sequencing helpers (Rev 2.0)
+  function initSequencing(){
+    sequencingUnused = metaList.slice(); // shallow copy
+    sequencingUsed = [];
+    shuffleArray(sequencingUnused);
+  }
+  function getNextUniqueImage(){
+    // If no images at all
+    if(!metaList.length) return null;
+    // Refill and reshuffle when exhausted
+    if(sequencingUnused.length === 0){
+      sequencingUnused = metaList.slice();
+      sequencingUsed = [];
+      shuffleArray(sequencingUnused);
+    }
+    // Pop one and mark used
+    const next = sequencingUnused.shift();
+    sequencingUsed.push(next);
+    return next;
+  }
+
+  // Choose separated yaw
   function chooseSeparatedYaw(){
     const maxAttempts = 60;
     for(let attempt=0; attempt<maxAttempts; attempt++){
       const yawDeg = randRange(0,360);
       let ok = true;
       for(const used of usedYaws){
-        const diff = Math.abs(((yawDeg - used + 180 + 360) % 360) - 180); // shortest difference
+        const diff = Math.abs(((yawDeg - used + 180 + 360) % 360) - 180);
         if(diff < MIN_ANGULAR_SEPARATION_DEG){ ok = false; break; }
       }
       if(ok){ usedYaws.push(yawDeg); return yawDeg * Math.PI/180; }
@@ -182,7 +218,7 @@
 
       const geom = new THREE.PlaneGeometry(width, height, segW, segH);
       const bend = Math.max(0, Math.min(1, data.curvature));
-      const arc = bend * Math.PI / 3; // stronger curve than earlier revs
+      const arc = bend * Math.PI / 3; // stronger curve
       const radius = (arc > 0) ? (width / arc) : 1000;
       const posAttr = geom.attributes.position;
       for(let i=0;i<posAttr.count;i++){
@@ -271,7 +307,7 @@
     return cvs;
   }
 
-  // Create curved panel entity
+  // Create curved panel entity — uses sequencing to ensure uniqueness on initial placement
   function createCurvedPanel(meta, panelHeight){
     const aspect = meta.width && meta.height ? meta.width / meta.height : 1.5;
     const height = Math.max(0.5, panelHeight);
@@ -286,40 +322,87 @@
     return ent;
   }
 
-  // Build initial visible panels
+  // Build initial visible panels with uniqueness guarantee
   async function buildPanels(panelHeight){
+    // clear old
     panelEntities.forEach(e=>{ try{ e.parentNode.removeChild(e); }catch(e){} });
     panelEntities = [];
     usedYaws = [];
 
+    // init sequencing pools
+    initSequencing();
+
+    // we will attempt to fill panels with unique images first
+    const available = metaList.slice();
+    shuffleArray(available);
+
+    // pick up to VISIBLE_PANELS unique images, if fewer images than panels, we'll reuse fairly
+    const takeCount = Math.min(VISIBLE_PANELS, available.length);
+    for(let i=0;i<takeCount;i++){
+      const m = available[i];
+      const ent = createCurvedPanel(m, panelHeight);
+      panelContainer.appendChild(ent);
+      panelEntities.push(ent);
+    }
+
+    // if not enough distinct images to reach VISIBLE_PANELS, fill the rest using sequencing (fair refill)
+    while(panelEntities.length < VISIBLE_PANELS && metaList.length){
+      const nextMeta = getNextUniqueImage() || metaList[Math.floor(Math.random()*metaList.length)];
+      const ent = createCurvedPanel(nextMeta, panelHeight);
+      panelContainer.appendChild(ent);
+      panelEntities.push(ent);
+    }
+
+    // prepare replacement pool for runtime swaps (unusedPool used to avoid immediate duplicates)
     unusedPool = metaList.slice();
     shuffleArray(unusedPool);
-
-    for(let i=0;i<Math.min(VISIBLE_PANELS, unusedPool.length); i++){
-      const m = unusedPool.shift();
-      const ent = createCurvedPanel(m, panelHeight);
-      panelContainer.appendChild(ent);
-      panelEntities.push(ent);
-    }
-    while(panelEntities.length < VISIBLE_PANELS && metaList.length){
-      const m = metaList[Math.floor(Math.random()*metaList.length)];
-      const ent = createCurvedPanel(m, panelHeight);
-      panelContainer.appendChild(ent);
-      panelEntities.push(ent);
-    }
   }
 
-  // Replace one panel (texture swap + fade)
+  // Replace one panel (texture swap + fade) — uses sequencing to prefer images not currently displayed
   function replaceOnePanel(panelHeight){
     if(!panelEntities.length || !metaList.length) return;
+
+    // replenishment for unusedPool
     if(unusedPool.length === 0){
       unusedPool = metaList.slice();
       shuffleArray(unusedPool);
     }
+
+    // pick a panel index to replace
     const idx = Math.floor(Math.random()*panelEntities.length);
     const old = panelEntities[idx];
 
+    // Determine a candidate image that is not already displayed if possible
+    const currentlyDisplayedIds = panelEntities.map(e => {
+      try {
+        const cp = e.getAttribute('curved-panel') || '';
+        const match = String(cp).match(/src:\s*#(img\d+)/);
+        return match ? `img${match[1].replace('img','')}` : null;
+      } catch(e){ return null; }
+    }).filter(Boolean);
+
+    // Helper to find next candidate not in current set
+    function findNextCandidate(){
+      // Prefer sequencing next unique image
+      if(sequencingUnused.length > 0){
+        const candidate = sequencingUnused.shift();
+        sequencingUsed.push(candidate);
+        return candidate;
+      }
+      // fallback: pick from unusedPool not already displayed
+      for(let i=0;i<unusedPool.length;i++){
+        const c = unusedPool[i];
+        if(!currentlyDisplayedIds.includes(c.id)){
+          unusedPool.splice(i,1); // remove from pool
+          return c;
+        }
+      }
+      // final fallback: any random metaList item
+      return metaList[Math.floor(Math.random()*metaList.length)];
+    }
+
     try {
+      // fade out old material opacity over 600ms, then swap src and fade in
       const mesh = old.getObject3D('mesh');
       if(mesh && mesh.material){
         mesh.material.transparent = true;
@@ -330,8 +413,9 @@
           mesh.material.opacity = Math.max(0, from * (1 - t));
           if(t < 1) requestAnimationFrame(fadeOut);
           else {
-            const next = unusedPool.shift();
-            old.setAttribute('curved-panel', `src: #${next.id}`);
+            const nextMeta = findNextCandidate();
+            old.setAttribute('curved-panel', `src: #${nextMeta.id}`);
+            // small delay to ensure texture loads then fade in
             const startIn = performance.now();
             (function fadeIn(nowIn){
               const ti = (nowIn - startIn)/600;
@@ -344,8 +428,7 @@
     } catch(e){ console.warn('Replace panel failed', e); }
   }
 
-  function shuffleArray(arr){ for(let i=arr.length-1;i>0;i--){ const j = Math.floor(Math.random()*(i+1)); [arr[i], arr[j]] = [arr[j], arr[i]]; } }
-
+  // wait for assets to load
   function waitForAssetsLoaded(){
     const imgs = Array.from(aAssets.querySelectorAll('img'));
     return Promise.all(imgs.map(img => new Promise((resolve)=>{
@@ -355,7 +438,7 @@
     })));
   }
 
-  // Start button
+  // Start button handler
   startBtn.addEventListener('click', async ()=>{
     startBtn.disabled = true;
     statusEl.textContent = 'Preparing slideshow — building textures...';
@@ -400,10 +483,10 @@
     }, 120);
   });
 
+  // quick debug exposure
+  window._vrslideshow = { metaList };
+
   // cleanup
   window.addEventListener('beforeunload', ()=>{ if(replaceTimer) clearInterval(replaceTimer); });
-
-  // quick debug
-  window._vrslideshow = { metaList };
 
 })();
