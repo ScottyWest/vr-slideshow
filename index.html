@@ -2,16 +2,16 @@
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>VR Slideshow — Gallery Mode (R1.9)</title>
+    <title>VR Slideshow — Rev 2.0</title>
 
-    <!-- A-Frame 1.5.0 (CDN) -->
+    <!-- A-Frame 1.5.0 -->
     <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
     <script src="https://unpkg.com/aframe-look-at-component@1.0.0/dist/aframe-look-at-component.min.js"></script>
 
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
       body { margin:0; font-family:Arial,Helvetica,sans-serif; background:#080808; color:#eee; padding:16px; }
-      #controls { max-width:840px; margin:0 auto; }
+      #controls { max-width:900px; margin:0 auto; }
       .thumbWrapper img { width:84px; height:84px; object-fit:cover; border-radius:6px; border:2px solid #444; }
       .thumbWrapper { display:inline-block; position:relative; margin:6px; }
       .removeBtn { position:absolute; top:-6px; right:-6px; background:#c33; color:#fff; border:none; width:22px; height:22px; border-radius:50%; cursor:pointer; }
@@ -23,10 +23,10 @@
 
   <body>
     <div id="controls">
-      <h2>VR Slideshow — Gallery Mode (R1.9)</h2>
+      <h2>VR Slideshow — Rev 2.0</h2>
 
-      <input id="filePicker" type="file" accept="image/*" />
-      <span style="margin-left:12px;">(Tap Choose Files repeatedly to add more images on Quest.)</span>
+      <input id="filePicker" type="file" accept="image/*" multiple />
+      <span style="margin-left:12px;">(Tap Choose Files repeatedly on Quest if needed.)</span>
 
       <p style="margin-top:8px;">
         Panel size:
@@ -37,7 +37,7 @@
         </select>
         &nbsp;&nbsp;
         Replace interval (sec):
-        <input id="replaceInterval" type="number" min="1" max="30" value="5" style="width:70px;" />
+        <input id="replaceInterval" type="number" min="1" max="60" value="5" style="width:80px;" />
       </p>
 
       <p>Visible panels: <strong>8</strong> (fixed)</p>
@@ -69,7 +69,6 @@
       </a-entity>
     </a-scene>
 
-    <!-- main app script (version bumped to v=9) -->
-    <script src="js/app.js?v=9"></script>
+    <script src="js/app.js?v=20"></script>
   </body>
 </html>
