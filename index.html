@@ -2,9 +2,13 @@
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>VR Slideshow — Gallery Mode (R1.7)</title>
+    <title>VR Slideshow — Gallery Mode (R1.8)</title>
+
+    <!-- A-Frame 1.5.0 (CDN) -->
     <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
     <script src="https://unpkg.com/aframe-look-at-component@1.0.0/dist/aframe-look-at-component.min.js"></script>
+
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
       body { margin:0; font-family:Arial,Helvetica,sans-serif; background:#080808; color:#eee; padding:16px; }
       #controls { max-width:840px; margin:0 auto; }
@@ -19,7 +23,8 @@
 
   <body>
     <div id="controls">
-      <h2>VR Slideshow — Gallery Mode (R1.7)</h2>
+      <h2>VR Slideshow — Gallery Mode (R1.8)</h2>
+
       <input id="filePicker" type="file" accept="image/*" />
       <span style="margin-left:12px;">(Tap Choose Files repeatedly to add more images on Quest.)</span>
 
@@ -30,6 +35,7 @@
           <option value="medium" selected>Medium</option>
           <option value="large">Large</option>
         </select>
+        &nbsp;&nbsp;
         Replace interval (sec):
         <input id="replaceInterval" type="number" min="1" max="30" value="5" style="width:70px;" />
       </p>
@@ -40,6 +46,10 @@
       <div id="status">No images selected yet.</div>
       <div id="imageList" aria-live="polite"></div>
       <div id="debug" aria-live="polite"></div>
+
+      <p style="margin-top:12px;font-size:13px;color:#aaa;">
+        When ready: press <strong>Start Slideshow</strong>. The page will prepare textures then prompt to enter VR.
+      </p>
     </div>
 
     <a-scene id="vrScene" embedded vr-mode-ui="enabled:true" style="display:none; height:100vh;">
@@ -49,7 +59,8 @@
         <a-entity id="camera" camera look-controls position="0 1.6 0"></a-entity>
       </a-entity>
 
-      <a-sphere radius="40" scale="-1 1 1" color="#000"></a-sphere>
+      <a-sphere radius="40" segments-height="48" segments-width="64" scale="-1 1 1" color="#000"></a-sphere>
+
       <a-entity id="panelContainer"></a-entity>
 
       <a-entity id="vrDebug" visible="false" position="-1.6 2 -2">
@@ -58,6 +69,7 @@
       </a-entity>
     </a-scene>
 
-    <script src="js/app.js"></script>
+    <!-- main app script (version bumped to v=8) -->
+    <script src="js/app.js?v=8"></script>
   </body>
 </html>
