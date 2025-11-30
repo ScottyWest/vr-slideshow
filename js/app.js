@@ -1,8 +1,11 @@
 /**
- * VR Slideshow — Rev 2.2
- * Date: 2025-11-29
- * Purpose: Preload all textures before starting the slideshow so replacements never stall.
- * Keeps A-Frame curved panels, radius 1.8m, middle 50% band, moderate anisotropy, linear mipmapped filtering.
+ * VR Slideshow — Rev 2.3
+ * Date: 2025-11-30
+ * Purpose: Robust replacement logic that rebuilds the unused pool each cycle.
+ * - Replacement interval set to 5 seconds by default (user can change in UI)
+ * - Textures preloaded into textureCache so swaps don't stall
+ * - Panels store dataset.metaId for robust tracking
+ * - Curved panels, radius 1.8m, middle 50% vertical band, moderate anisotropy, linear mipmapped filtering
  */
 
 (function(){
@@ -38,9 +41,7 @@
   let usedYaws = [];
 
   // Sequencing pools
-  // unusedSequencing: images not currently displayed and available to be used next
   // displayedSet: set of ids currently shown on panels
-  let unusedSequencing = []; // array of meta objects
   let displayedSet = new Set();
 
   // Texture cache: maps meta.id -> THREE.Texture (preloaded)
@@ -106,10 +107,8 @@
     rebuildThumbs();
     statusEl.textContent = `${metaList.length} images selected.`;
     startBtn.disabled = metaList.length < 1;
-    // keep sequencing pools consistent
-    unusedSequencing = unusedSequencing.filter(m => m.id !== meta.id);
+    // keep display tracking consistent
     if(displayedSet.has(meta.id)) displayedSet.delete(meta.id);
-    // remove texture from cache if present
     if(textureCache[meta.id]) delete textureCache[meta.id];
   }
 
@@ -305,7 +304,7 @@
     return cvs;
   }
 
-  // Create curved panel entity using provided meta
+  // Create curved panel entity using provided meta and store metaId on dataset
   function createCurvedPanelForMeta(meta, panelHeight){
     const aspect = meta.width && meta.height ? meta.width / meta.height : 1.5;
     const height = Math.max(0.5, panelHeight);
@@ -317,6 +316,8 @@
     ent.setAttribute('rotation', `0 ${-pos.theta * 180/Math.PI} 0`);
     ent.setAttribute('curved-panel', `width: ${width}; height: ${height}; curvature: ${PANEL_CURVATURE}; src: #${meta.id}`);
     ent.setAttribute('look-at', '#camera');
+    // Save metaId on DOM dataset for robust retrieval later
+    ent.dataset.metaId = meta.id;
     return ent;
   }
 
@@ -327,7 +328,6 @@
     panelEntities = [];
     usedYaws = [];
     displayedSet.clear();
-    unusedSequencing = [];
 
     if(!metaList.length) return;
 
@@ -352,13 +352,9 @@
       panelEntities.push(ent);
       displayedSet.add(m.id);
     }
-
-    // Build the unused sequencing pool: all metaList entries not currently displayed
-    unusedSequencing = metaList.filter(m => !displayedSet.has(m.id));
-    shuffleArray(unusedSequencing);
   }
 
-  // Replace one panel (texture swap + fade) — uses preloaded textureCache to avoid async stalls
+  // Replace one panel (texture swap + fade) — recompute unused images each cycle
   function replaceOnePanel(panelHeight){
     if(!panelEntities.length || !metaList.length) return;
 
@@ -366,22 +362,21 @@
     const idx = Math.floor(Math.random()*panelEntities.length);
     const old = panelEntities[idx];
 
-    // Helper to pick next candidate:
-    function pickNextMeta(){
-      if(unusedSequencing.length > 0){
-        return unusedSequencing.shift();
-      }
-      // try to find any meta not currently displayed
-      const notDisplayed = metaList.filter(m => !displayedSet.has(m.id));
-      if(notDisplayed.length > 0){
-        shuffleArray(notDisplayed);
-        return notDisplayed[0];
-      }
-      // fallback: allow duplicate if necessary
-      return metaList[Math.floor(Math.random()*metaList.length)];
+    // Recompute currently displayed ids (fresh)
+    const currentlyDisplayedIds = panelEntities.map(e => e.dataset.metaId).filter(Boolean);
+
+    // Build unused list: images not currently displayed
+    let unused = metaList.filter(m => !currentlyDisplayedIds.includes(m.id));
+
+    // If unused is empty (all images are currently displayed), allow reuse by using full list
+    if(unused.length === 0){
+      unused = metaList.slice();
     }
 
-    // Actual swap logic (use textureCache when applying)
+    // pick a random candidate from unused
+    const nextMeta = unused[Math.floor(Math.random()*unused.length)];
+
+    // Swap with fade, update dataset.metaId and displayedSet
     try {
       const mesh = old.getObject3D('mesh');
       if(mesh && mesh.material){
@@ -393,44 +388,27 @@
           mesh.material.opacity = Math.max(0, from * (1 - t));
           if(t < 1) requestAnimationFrame(fadeOut);
           else {
-            // Determine what meta is currently on this entity (oldMetaId)
-            let oldMetaId = null;
-            try {
-              const cp = old.getAttribute('curved-panel') || '';
-              const match = String(cp).match(/src:\s*#(img\d+)/);
-              if(match) oldMetaId = match[1].startsWith('img') ? match[1] : ('img' + match[1]);
-            } catch(e){ oldMetaId = null; }
+            // old meta id
+            const oldMetaId = old.dataset && old.dataset.metaId ? old.dataset.metaId : null;
 
-            // pick next
-            const nextMeta = pickNextMeta();
-
-            // Update displayedSet: remove old, add new
+            // update displayedSet
             if(oldMetaId && displayedSet.has(oldMetaId)) displayedSet.delete(oldMetaId);
             if(nextMeta && nextMeta.id) displayedSet.add(nextMeta.id);
 
-            // If replaced image (oldMetaId) is not same as nextMeta, and oldMetaId is valid,
-            // push old meta back into unusedSequencing so it can be reused later.
-            if(oldMetaId){
-              const oldMetaObj = metaList.find(m => m.id === oldMetaId);
-              if(oldMetaObj && oldMetaObj.id !== (nextMeta && nextMeta.id)){
-                unusedSequencing.push(oldMetaObj);
-                if(unusedSequencing.length > 1 && Math.random() < 0.25) shuffleArray(unusedSequencing);
-              }
+            // set the new attribute and dataset id
+            if(nextMeta && nextMeta.id){
+              old.setAttribute('curved-panel', `src: #${nextMeta.id}`);
+              old.dataset.metaId = nextMeta.id;
             }
 
-            // Apply the new src to the curved-panel attribute
-            if(nextMeta && nextMeta.id){
-              // If the component uses textureCache, set attribute (component will prefer cache)
-              old.setAttribute('curved-panel', `src: #${nextMeta.id}`);
-              // Also attempt to set the mesh.material.map directly to avoid any component overhead
-              try {
-                const tex = textureCache[nextMeta.id];
-                if(tex && mesh.material){
-                  mesh.material.map = tex;
-                  mesh.material.needsUpdate = true;
-                }
-              } catch(e){}
-            }
+            // directly assign cached texture if available for instant swap
+            try {
+              const tex = textureCache[nextMeta.id];
+              if(tex && mesh.material){
+                mesh.material.map = tex;
+                mesh.material.needsUpdate = true;
+              }
+            } catch(e){}
 
             // fade in
             const startIn = performance.now();
@@ -460,7 +438,6 @@
         if(!img || !img.id) return;
         try {
           const tex = new THREE.Texture(img);
-          // attempt to set anisotropy based on renderer if available, otherwise use desired
           try {
             const sc = document.querySelector('a-scene');
             const renderer = sc && sc.renderer;
@@ -516,7 +493,7 @@
         return;
       }
 
-      // Replacement interval
+      // Replacement interval - enforce 5 seconds unless user changes in UI
       const interval = Math.max(1, parseFloat(document.getElementById('replaceInterval').value) || 5);
 
       // Clear any previous timer then set new one
@@ -530,7 +507,7 @@
     }, 120);
   });
 
-  // waitForAssets: used earlier versions (kept for compatibility but we use the combined function above)
+  // waitForAssets: kept for compatibility
   function waitForAssetsLoaded(){
     const imgs = Array.from(aAssets.querySelectorAll('img'));
     return Promise.all(imgs.map(img => new Promise((resolve)=>{
@@ -540,8 +517,8 @@
     })));
   }
 
-  // quick debug helper: expose metaList & displayedSet & textureCache size
-  window._vrslideshow = { metaList, displayedSet, unusedSequencing, textureCache };
+  // debug exposure
+  window._vrslideshow = { metaList, displayedSet, textureCache };
 
   // cleanup
   window.addEventListener('beforeunload', ()=>{ if(replaceTimer) clearInterval(replaceTimer); });
