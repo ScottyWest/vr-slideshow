@@ -1,11 +1,13 @@
 /**
- * VR Slideshow — Rev 2.3
+ * VR Slideshow — Rev 2.4
  * Date: 2025-11-30
- * Purpose: Robust replacement logic that rebuilds the unused pool each cycle.
- * - Replacement interval set to 5 seconds by default (user can change in UI)
- * - Textures preloaded into textureCache so swaps don't stall
- * - Panels store dataset.metaId for robust tracking
- * - Curved panels, radius 1.8m, middle 50% vertical band, moderate anisotropy, linear mipmapped filtering
+ * Purpose: Definitive replacement logic: rebuild unused pool each cycle, preload textures,
+ * and include explicit feature checkpoint markers so the file can be verified after copy/paste.
+ *
+ * REV 2.4 CHECKPOINT A: Sequencing data structures present (displayedSet, unused pool rebuild)
+ * REV 2.4 CHECKPOINT B: replaceOnePanel() implemented and uses dataset.metaId
+ * REV 2.4 CHECKPOINT C: preloadAllTextures() creates textureCache entries for all assets
+ * REV 2.4 CHECKPOINT D: startShow() wires preload -> build -> setInterval reliably
  */
 
 (function(){
@@ -40,11 +42,11 @@
   let replaceTimer = null;
   let usedYaws = [];
 
-  // Sequencing pools
+  // Sequencing pools (REV 2.4 CHECKPOINT A)
   // displayedSet: set of ids currently shown on panels
   let displayedSet = new Set();
 
-  // Texture cache: maps meta.id -> THREE.Texture (preloaded)
+  // Texture cache: maps meta.id -> THREE.Texture (preloaded) (REV 2.4 CHECKPOINT C)
   const textureCache = {};
 
   // Helpers
@@ -304,7 +306,7 @@
     return cvs;
   }
 
-  // Create curved panel entity using provided meta and store metaId on dataset
+  // Create curved panel entity using provided meta and store metaId on dataset (REV 2.4 CHECKPOINT B)
   function createCurvedPanelForMeta(meta, panelHeight){
     const aspect = meta.width && meta.height ? meta.width / meta.height : 1.5;
     const height = Math.max(0.5, panelHeight);
@@ -354,7 +356,7 @@
     }
   }
 
-  // Replace one panel (texture swap + fade) — recompute unused images each cycle
+  // Replace one panel (texture swap + fade) — recompute unused images each cycle (REV 2.4 CHECKPOINT B)
   function replaceOnePanel(panelHeight){
     if(!panelEntities.length || !metaList.length) return;
 
@@ -423,7 +425,7 @@
     } catch(e){ console.warn('Replace panel failed', e); }
   }
 
-  // wait for assets loaded AND create THREE.Texture for each <img> in aAssets into textureCache
+  // wait for assets loaded AND create THREE.Texture for each <img> in aAssets into textureCache (REV 2.4 CHECKPOINT C)
   function waitForAssetsAndCreateTextures(){
     const imgs = Array.from(aAssets.querySelectorAll('img'));
     // Wait until each image element is complete
@@ -458,7 +460,7 @@
     });
   }
 
-  // Start button handler
+  // Start button handler (REV 2.4 CHECKPOINT D)
   startBtn.addEventListener('click', async ()=>{
     startBtn.disabled = true;
     statusEl.textContent = 'Preparing slideshow — building textures...';
