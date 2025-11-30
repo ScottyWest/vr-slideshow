@@ -2,7 +2,7 @@
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>VR Slideshow — Rev 2.2</title>
+    <title>VR Slideshow — Rev 2.3</title>
 
     <!-- A-Frame 1.5.0 -->
     <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
@@ -23,7 +23,7 @@
 
   <body>
     <div id="controls">
-      <h2>VR Slideshow — Rev 2.2</h2>
+      <h2>VR Slideshow — Rev 2.3</h2>
 
       <input id="filePicker" type="file" accept="image/*" multiple />
       <span style="margin-left:12px;">(Tap Choose Files repeatedly on Quest if needed.)</span>
@@ -38,6 +38,7 @@
         &nbsp;&nbsp;
         Replace interval (sec):
         <input id="replaceInterval" type="number" min="1" max="60" value="5" style="width:80px;" />
+        <span style="margin-left:10px;color:#aaa;font-size:13px;">(Rev 2.3 defaults to 5s)</span>
       </p>
 
       <p>Visible panels: <strong>8</strong> (fixed)</p>
@@ -69,6 +70,6 @@
       </a-entity>
     </a-scene>
 
-    <script src="js/app.js?v=22"></script>
+    <script src="js/app.js?v=23"></script>
   </body>
 </html>
