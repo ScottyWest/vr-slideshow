@@ -1,8 +1,11 @@
 /**
- * VR Slideshow — Rev 2.0
+ * VR Slideshow — Rev 2.1
  * Date: 2025-11-28
- * Purpose: Add image sequencing — no duplicates until all images used.
- * Keeps the A-Frame curved panel approach, radius 1.8m, tuned texture settings.
+ * Purpose: Correct and bulletproof panel rotation + sequencing:
+ * - Display 8 unique images at start (if available)
+ * - Maintain an unused-images pool and replace one panel every interval
+ * - Avoid duplicates while unused images remain
+ * - Texture quality tuned (moderate anisotropy, linear mipmapped filtering)
  */
 
 (function(){
@@ -33,14 +36,15 @@
   // State
   let metaList = []; // { id, dataUrl, width, height }
   let nextAssetId = 0;
-  let panelEntities = [];
-  let unusedPool = [];      // pool used for replacements (Rev 2.0 will manage uniqueness)
+  let panelEntities = [];   // visible panel elements (length === VISIBLE_PANELS)
   let replaceTimer = null;
   let usedYaws = [];
 
-  // New sequencing lists (Rev 2.0)
-  let sequencingUnused = []; // images not yet used in current cycle
-  let sequencingUsed = [];   // images already used in this cycle
+  // Sequencing pools (Rev 2.1)
+  // unusedSequencing: images not currently displayed and available to be used next
+  // displayedSet: set of ids currently shown on panels
+  let unusedSequencing = []; // array of meta objects
+  let displayedSet = new Set();
 
   // Helpers
   function log(msg){
@@ -102,9 +106,9 @@
     rebuildThumbs();
     statusEl.textContent = `${metaList.length} images selected.`;
     startBtn.disabled = metaList.length < 1;
-    // Update sequencing pools if running
-    sequencingUnused = sequencingUnused.filter(m => m.id !== meta.id);
-    sequencingUsed = sequencingUsed.filter(m => m.id !== meta.id);
+    // keep sequencing pools consistent
+    unusedSequencing = unusedSequencing.filter(m => m.id !== meta.id);
+    if(displayedSet.has(meta.id)) displayedSet.delete(meta.id);
   }
 
   // File picker (supports multiple)
@@ -144,27 +148,6 @@
       [arr[i], arr[j]] = [arr[j], arr[i]];
     }
     return arr;
-  }
-
-  // sequencing helpers (Rev 2.0)
-  function initSequencing(){
-    sequencingUnused = metaList.slice(); // shallow copy
-    sequencingUsed = [];
-    shuffleArray(sequencingUnused);
-  }
-  function getNextUniqueImage(){
-    // If no images at all
-    if(!metaList.length) return null;
-    // Refill and reshuffle when exhausted
-    if(sequencingUnused.length === 0){
-      sequencingUnused = metaList.slice();
-      sequencingUsed = [];
-      shuffleArray(sequencingUnused);
-    }
-    // Pop one and mark used
-    const next = sequencingUnused.shift();
-    sequencingUsed.push(next);
-    return next;
   }
 
   // Choose separated yaw
@@ -307,8 +290,8 @@
     return cvs;
   }
 
-  // Create curved panel entity — uses sequencing to ensure uniqueness on initial placement
-  function createCurvedPanel(meta, panelHeight){
+  // Create curved panel entity using provided meta
+  function createCurvedPanelForMeta(meta, panelHeight){
     const aspect = meta.width && meta.height ? meta.width / meta.height : 1.5;
     const height = Math.max(0.5, panelHeight);
     let width = Math.max(0.6, height * aspect);
@@ -328,81 +311,70 @@
     panelEntities.forEach(e=>{ try{ e.parentNode.removeChild(e); }catch(e){} });
     panelEntities = [];
     usedYaws = [];
+    displayedSet.clear();
+    unusedSequencing = [];
 
-    // init sequencing pools
-    initSequencing();
+    if(!metaList.length) return;
 
-    // we will attempt to fill panels with unique images first
-    const available = metaList.slice();
-    shuffleArray(available);
+    // shuffle list for randomness
+    const shuffled = shuffleArray(metaList.slice());
 
-    // pick up to VISIBLE_PANELS unique images, if fewer images than panels, we'll reuse fairly
-    const takeCount = Math.min(VISIBLE_PANELS, available.length);
-    for(let i=0;i<takeCount;i++){
-      const m = available[i];
-      const ent = createCurvedPanel(m, panelHeight);
+    // Take up to VISIBLE_PANELS unique images for initial display
+    const initialCount = Math.min(VISIBLE_PANELS, shuffled.length);
+    for(let i=0;i<initialCount;i++){
+      const m = shuffled[i];
+      const ent = createCurvedPanelForMeta(m, panelHeight);
       panelContainer.appendChild(ent);
       panelEntities.push(ent);
+      displayedSet.add(m.id);
     }
 
-    // if not enough distinct images to reach VISIBLE_PANELS, fill the rest using sequencing (fair refill)
-    while(panelEntities.length < VISIBLE_PANELS && metaList.length){
-      const nextMeta = getNextUniqueImage() || metaList[Math.floor(Math.random()*metaList.length)];
-      const ent = createCurvedPanel(nextMeta, panelHeight);
+    // If we have fewer than VISIBLE_PANELS images, duplicate fairly until filled
+    while(panelEntities.length < VISIBLE_PANELS){
+      // pick from shuffled again but try to evenly select
+      const m = shuffled[panelEntities.length % shuffled.length];
+      const ent = createCurvedPanelForMeta(m, panelHeight);
       panelContainer.appendChild(ent);
       panelEntities.push(ent);
+      displayedSet.add(m.id);
     }
 
-    // prepare replacement pool for runtime swaps (unusedPool used to avoid immediate duplicates)
-    unusedPool = metaList.slice();
-    shuffleArray(unusedPool);
+    // Build the unused sequencing pool: all metaList entries not currently displayed
+    unusedSequencing = metaList.filter(m => !displayedSet.has(m.id));
+    shuffleArray(unusedSequencing);
+
+    // If no unusedSequencing exists (user loaded exactly VISIBLE_PANELS or fewer),
+    // then unusedSequencing stays empty and replacements will cycle fairly.
   }
 
   // Replace one panel (texture swap + fade) — uses sequencing to prefer images not currently displayed
   function replaceOnePanel(panelHeight){
     if(!panelEntities.length || !metaList.length) return;
 
-    // replenishment for unusedPool
-    if(unusedPool.length === 0){
-      unusedPool = metaList.slice();
-      shuffleArray(unusedPool);
-    }
-
-    // pick a panel index to replace
+    // pick a random panel index to replace
     const idx = Math.floor(Math.random()*panelEntities.length);
     const old = panelEntities[idx];
 
-    // Determine a candidate image that is not already displayed if possible
-    const currentlyDisplayedIds = panelEntities.map(e => {
-      try {
-        const cp = e.getAttribute('curved-panel') || '';
-        const match = String(cp).match(/src:\s*#(img\d+)/);
-        return match ? `img${match[1].replace('img','')}` : null;
-      } catch(e){ return null; }
-    }).filter(Boolean);
-
-    // Helper to find next candidate not in current set
-    function findNextCandidate(){
-      // Prefer sequencing next unique image
-      if(sequencingUnused.length > 0){
-        const candidate = sequencingUnused.shift();
-        sequencingUsed.push(candidate);
-        return candidate;
+    // Helper to pick next candidate:
+    // 1) If unusedSequencing has items, take one (no duplicates)
+    // 2) Else, if there exist metaList items not currently displayed, pick one at random
+    // 3) Else, as a last resort, pick a random metaList item (duplicates unavoidable)
+    function pickNextMeta(){
+      if(unusedSequencing.length > 0){
+        return unusedSequencing.shift();
       }
-      // fallback: pick from unusedPool not already displayed
-      for(let i=0;i<unusedPool.length;i++){
-        const c = unusedPool[i];
-        if(!currentlyDisplayedIds.includes(c.id)){
-          unusedPool.splice(i,1); // remove from pool
-          return c;
-        }
+      // try to find any meta not currently displayed
+      const notDisplayed = metaList.filter(m => !displayedSet.has(m.id));
+      if(notDisplayed.length > 0){
+        shuffleArray(notDisplayed);
+        return notDisplayed[0];
       }
-      // final fallback: any random metaList item
+      // fallback: allow duplicate if necessary
       return metaList[Math.floor(Math.random()*metaList.length)];
     }
 
+    // Actual swap logic
     try {
-      // fade out old material opacity over 600ms, then swap src and fade in
       const mesh = old.getObject3D('mesh');
       if(mesh && mesh.material){
         mesh.material.transparent = true;
@@ -413,9 +385,39 @@
           mesh.material.opacity = Math.max(0, from * (1 - t));
           if(t < 1) requestAnimationFrame(fadeOut);
           else {
-            const nextMeta = findNextCandidate();
-            old.setAttribute('curved-panel', `src: #${nextMeta.id}`);
-            // small delay to ensure texture loads then fade in
+            // Determine what meta is currently on this entity (oldMetaId)
+            let oldMetaId = null;
+            try {
+              const cp = old.getAttribute('curved-panel') || '';
+              const match = String(cp).match(/src:\s*#(img\d+)/);
+              if(match) oldMetaId = match[1].startsWith('img') ? match[1] : ('img' + match[1]);
+            } catch(e){ oldMetaId = null; }
+
+            // pick next
+            const nextMeta = pickNextMeta();
+
+            // Update displayedSet: remove old, add new
+            if(oldMetaId && displayedSet.has(oldMetaId)) displayedSet.delete(oldMetaId);
+            if(nextMeta && nextMeta.id) displayedSet.add(nextMeta.id);
+
+            // If replaced image (oldMetaId) is not same as nextMeta, and oldMetaId is valid,
+            // push old meta back into unusedSequencing so it can be reused later.
+            if(oldMetaId){
+              const oldMetaObj = metaList.find(m => m.id === oldMetaId);
+              if(oldMetaObj && oldMetaObj.id !== (nextMeta && nextMeta.id)){
+                unusedSequencing.push(oldMetaObj);
+                // Keep pool shuffled-ish
+                // (a small shuffle to avoid deterministic cycles)
+                if(unusedSequencing.length > 1 && Math.random() < 0.25) shuffleArray(unusedSequencing);
+              }
+            }
+
+            // Apply the new src to the curved-panel attribute
+            if(nextMeta && nextMeta.id){
+              old.setAttribute('curved-panel', `src: #${nextMeta.id}`);
+            }
+
+            // fade in
             const startIn = performance.now();
             (function fadeIn(nowIn){
               const ti = (nowIn - startIn)/600;
@@ -458,9 +460,11 @@
       return;
     }
 
+    // Hide UI, show scene
     document.getElementById('controls').style.display = 'none';
     scene.style.display = 'block';
 
+    // Enter VR after brief delay to allow A-Frame to stabilize
     setTimeout(async ()=>{
       try {
         await scene.enterVR();
@@ -472,7 +476,10 @@
         return;
       }
 
+      // Replacement interval
       const interval = Math.max(1, parseFloat(document.getElementById('replaceInterval').value) || 5);
+
+      // Clear any previous timer then set new one
       if(replaceTimer) clearInterval(replaceTimer);
       replaceTimer = setInterval(()=> {
         try { replaceOnePanel(panelHeight); } catch(e) { log('Replace error: ' + e); }
@@ -483,8 +490,8 @@
     }, 120);
   });
 
-  // quick debug exposure
-  window._vrslideshow = { metaList };
+  // quick debug helper: expose metaList & displayedSet
+  window._vrslideshow = { metaList, displayedSet, unusedSequencing };
 
   // cleanup
   window.addEventListener('beforeunload', ()=>{ if(replaceTimer) clearInterval(replaceTimer); });
