@@ -1,11 +1,8 @@
 /**
- * VR Slideshow — Rev 2.1
- * Date: 2025-11-28
- * Purpose: Correct and bulletproof panel rotation + sequencing:
- * - Display 8 unique images at start (if available)
- * - Maintain an unused-images pool and replace one panel every interval
- * - Avoid duplicates while unused images remain
- * - Texture quality tuned (moderate anisotropy, linear mipmapped filtering)
+ * VR Slideshow — Rev 2.2
+ * Date: 2025-11-29
+ * Purpose: Preload all textures before starting the slideshow so replacements never stall.
+ * Keeps A-Frame curved panels, radius 1.8m, middle 50% band, moderate anisotropy, linear mipmapped filtering.
  */
 
 (function(){
@@ -40,11 +37,14 @@
   let replaceTimer = null;
   let usedYaws = [];
 
-  // Sequencing pools (Rev 2.1)
+  // Sequencing pools
   // unusedSequencing: images not currently displayed and available to be used next
   // displayedSet: set of ids currently shown on panels
   let unusedSequencing = []; // array of meta objects
   let displayedSet = new Set();
+
+  // Texture cache: maps meta.id -> THREE.Texture (preloaded)
+  const textureCache = {};
 
   // Helpers
   function log(msg){
@@ -109,6 +109,8 @@
     // keep sequencing pools consistent
     unusedSequencing = unusedSequencing.filter(m => m.id !== meta.id);
     if(displayedSet.has(meta.id)) displayedSet.delete(meta.id);
+    // remove texture from cache if present
+    if(textureCache[meta.id]) delete textureCache[meta.id];
   }
 
   // File picker (supports multiple)
@@ -181,7 +183,7 @@
     return { x, y, z, theta, yawDeg: yaw * 180/Math.PI, elevationDeg };
   }
 
-  // Curved panel component (static textures — quality tuned)
+  // Curved panel component (uses textureCache when possible)
   AFRAME.registerComponent('curved-panel', {
     schema: {
       width: { type: 'number', default: 1.2 },
@@ -201,7 +203,7 @@
 
       const geom = new THREE.PlaneGeometry(width, height, segW, segH);
       const bend = Math.max(0, Math.min(1, data.curvature));
-      const arc = bend * Math.PI / 3; // stronger curve
+      const arc = bend * Math.PI / 3;
       const radius = (arc > 0) ? (width / arc) : 1000;
       const posAttr = geom.attributes.position;
       for(let i=0;i<posAttr.count;i++){
@@ -240,16 +242,28 @@
       const self = this;
       try {
         if(typeof src === 'string' && src.charAt(0) === '#'){
+          const id = src.slice(1);
+          // Prefer textureCache if available
+          if(textureCache[id]){
+            const tex = textureCache[id];
+            if(self.mesh && self.mesh.material){ self.mesh.material.map = tex; self.mesh.material.needsUpdate = true; }
+            self.texture = tex;
+            return;
+          }
+          // Fallback: create texture from DOM <img> element (should be loaded already)
           const imgEl = document.querySelector(src);
           if(imgEl){
             const tex = new THREE.Texture(imgEl);
-            try { const renderer = self.el.sceneEl.renderer; const maxAniso = renderer && renderer.capabilities ? renderer.capabilities.getMaxAnisotropy() : DESIRED_ANISOTROPY; tex.anisotropy = Math.min(DESIRED_ANISOTROPY, maxAniso || DESIRED_ANISOTROPY); } catch(e){ tex.anisotropy = DESIRED_ANISOTROPY; }
+            try { const renderer = self.el.sceneEl && self.el.sceneEl.renderer; const maxAniso = renderer && renderer.capabilities ? renderer.capabilities.getMaxAnisotropy() : DESIRED_ANISOTROPY; tex.anisotropy = Math.min(DESIRED_ANISOTROPY, maxAniso || DESIRED_ANISOTROPY); } catch(e){ tex.anisotropy = DESIRED_ANISOTROPY; }
             tex.encoding = THREE.sRGBEncoding;
             tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
             tex.minFilter = THREE.LinearMipmapLinearFilter;
             tex.magFilter = THREE.LinearFilter;
             tex.generateMipmaps = true;
             tex.needsUpdate = true;
+
+            // cache it for future swaps
+            textureCache[id] = tex;
 
             if(self.mesh && self.mesh.material){ self.mesh.material.map = tex; self.mesh.material.needsUpdate = true; }
             self.texture = tex;
@@ -258,9 +272,10 @@
         }
       } catch(e){ console.warn('DOM texture path failed', e); }
 
+      // final fallback: try loading via TextureLoader (should be rare since we preload)
       const loader = new THREE.TextureLoader(); loader.setCrossOrigin('anonymous');
       loader.load(src, function(tex){
-        try { const renderer = self.el.sceneEl.renderer; const maxAniso = renderer && renderer.capabilities ? renderer.capabilities.getMaxAnisotropy() : DESIRED_ANISOTROPY; tex.anisotropy = Math.min(DESIRED_ANISOTROPY, maxAniso || DESIRED_ANISOTROPY); } catch(e){ tex.anisotropy = DESIRED_ANISOTROPY; }
+        try { const renderer = self.el.sceneEl && self.el.sceneEl.renderer; const maxAniso = renderer && renderer.capabilities ? renderer.capabilities.getMaxAnisotropy() : DESIRED_ANISOTROPY; tex.anisotropy = Math.min(DESIRED_ANISOTROPY, maxAniso || DESIRED_ANISOTROPY); } catch(e){ tex.anisotropy = DESIRED_ANISOTROPY; }
         tex.encoding = THREE.sRGBEncoding;
         tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
         tex.minFilter = THREE.LinearMipmapLinearFilter;
@@ -331,7 +346,6 @@
 
     // If we have fewer than VISIBLE_PANELS images, duplicate fairly until filled
     while(panelEntities.length < VISIBLE_PANELS){
-      // pick from shuffled again but try to evenly select
       const m = shuffled[panelEntities.length % shuffled.length];
       const ent = createCurvedPanelForMeta(m, panelHeight);
       panelContainer.appendChild(ent);
@@ -342,12 +356,9 @@
     // Build the unused sequencing pool: all metaList entries not currently displayed
     unusedSequencing = metaList.filter(m => !displayedSet.has(m.id));
     shuffleArray(unusedSequencing);
-
-    // If no unusedSequencing exists (user loaded exactly VISIBLE_PANELS or fewer),
-    // then unusedSequencing stays empty and replacements will cycle fairly.
   }
 
-  // Replace one panel (texture swap + fade) — uses sequencing to prefer images not currently displayed
+  // Replace one panel (texture swap + fade) — uses preloaded textureCache to avoid async stalls
   function replaceOnePanel(panelHeight){
     if(!panelEntities.length || !metaList.length) return;
 
@@ -356,9 +367,6 @@
     const old = panelEntities[idx];
 
     // Helper to pick next candidate:
-    // 1) If unusedSequencing has items, take one (no duplicates)
-    // 2) Else, if there exist metaList items not currently displayed, pick one at random
-    // 3) Else, as a last resort, pick a random metaList item (duplicates unavoidable)
     function pickNextMeta(){
       if(unusedSequencing.length > 0){
         return unusedSequencing.shift();
@@ -373,7 +381,7 @@
       return metaList[Math.floor(Math.random()*metaList.length)];
     }
 
-    // Actual swap logic
+    // Actual swap logic (use textureCache when applying)
     try {
       const mesh = old.getObject3D('mesh');
       if(mesh && mesh.material){
@@ -406,15 +414,22 @@
               const oldMetaObj = metaList.find(m => m.id === oldMetaId);
               if(oldMetaObj && oldMetaObj.id !== (nextMeta && nextMeta.id)){
                 unusedSequencing.push(oldMetaObj);
-                // Keep pool shuffled-ish
-                // (a small shuffle to avoid deterministic cycles)
                 if(unusedSequencing.length > 1 && Math.random() < 0.25) shuffleArray(unusedSequencing);
               }
             }
 
             // Apply the new src to the curved-panel attribute
             if(nextMeta && nextMeta.id){
+              // If the component uses textureCache, set attribute (component will prefer cache)
               old.setAttribute('curved-panel', `src: #${nextMeta.id}`);
+              // Also attempt to set the mesh.material.map directly to avoid any component overhead
+              try {
+                const tex = textureCache[nextMeta.id];
+                if(tex && mesh.material){
+                  mesh.material.map = tex;
+                  mesh.material.needsUpdate = true;
+                }
+              } catch(e){}
             }
 
             // fade in
@@ -430,14 +445,40 @@
     } catch(e){ console.warn('Replace panel failed', e); }
   }
 
-  // wait for assets to load
-  function waitForAssetsLoaded(){
+  // wait for assets loaded AND create THREE.Texture for each <img> in aAssets into textureCache
+  function waitForAssetsAndCreateTextures(){
     const imgs = Array.from(aAssets.querySelectorAll('img'));
-    return Promise.all(imgs.map(img => new Promise((resolve)=>{
-      if(img.complete && img.naturalWidth>0) return resolve();
-      img.onload = ()=> resolve();
-      img.onerror = ()=> { log('Asset failed: ' + (img.id||'unknown')); resolve(); };
-    })));
+    // Wait until each image element is complete
+    const loads = imgs.map(img => new Promise((resolve) => {
+      if(img.complete && img.naturalWidth > 0) return resolve(img);
+      img.onload = () => resolve(img);
+      img.onerror = () => resolve(img); // still resolve on error to not block
+    }));
+    return Promise.all(loads).then(loadedImgs => {
+      // create textures and store in cache
+      loadedImgs.forEach(img => {
+        if(!img || !img.id) return;
+        try {
+          const tex = new THREE.Texture(img);
+          // attempt to set anisotropy based on renderer if available, otherwise use desired
+          try {
+            const sc = document.querySelector('a-scene');
+            const renderer = sc && sc.renderer;
+            const maxAniso = renderer && renderer.capabilities ? renderer.capabilities.getMaxAnisotropy() : DESIRED_ANISOTROPY;
+            tex.anisotropy = Math.min(DESIRED_ANISOTROPY, maxAniso || DESIRED_ANISOTROPY);
+          } catch(e){ tex.anisotropy = DESIRED_ANISOTROPY; }
+          tex.encoding = THREE.sRGBEncoding;
+          tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+          tex.minFilter = THREE.LinearMipmapLinearFilter;
+          tex.magFilter = THREE.LinearFilter;
+          tex.generateMipmaps = true;
+          tex.needsUpdate = true;
+          textureCache[img.id] = tex;
+        } catch(e){
+          console.warn('texture creation failed for', img.id, e);
+        }
+      });
+    });
   }
 
   // Start button handler
@@ -452,7 +493,8 @@
     const panelHeight = DEFAULT_PANEL_HEIGHTS[sizeKey] || DEFAULT_PANEL_HEIGHTS.medium;
 
     try{
-      await waitForAssetsLoaded();
+      // Ensure DOM img assets are loaded and then create THREE.Textures for each -> textureCache
+      await waitForAssetsAndCreateTextures();
       await buildPanels(panelHeight);
     } catch(err){
       log('Build panels error: ' + (err && err.message?err.message:err));
@@ -460,11 +502,9 @@
       return;
     }
 
-    // Hide UI, show scene
     document.getElementById('controls').style.display = 'none';
     scene.style.display = 'block';
 
-    // Enter VR after brief delay to allow A-Frame to stabilize
     setTimeout(async ()=>{
       try {
         await scene.enterVR();
@@ -490,8 +530,18 @@
     }, 120);
   });
 
-  // quick debug helper: expose metaList & displayedSet
-  window._vrslideshow = { metaList, displayedSet, unusedSequencing };
+  // waitForAssets: used earlier versions (kept for compatibility but we use the combined function above)
+  function waitForAssetsLoaded(){
+    const imgs = Array.from(aAssets.querySelectorAll('img'));
+    return Promise.all(imgs.map(img => new Promise((resolve)=>{
+      if(img.complete && img.naturalWidth>0) return resolve();
+      img.onload = ()=> resolve();
+      img.onerror = ()=> { log('Asset failed: ' + (img.id||'unknown')); resolve(); };
+    })));
+  }
+
+  // quick debug helper: expose metaList & displayedSet & textureCache size
+  window._vrslideshow = { metaList, displayedSet, unusedSequencing, textureCache };
 
   // cleanup
   window.addEventListener('beforeunload', ()=>{ if(replaceTimer) clearInterval(replaceTimer); });
